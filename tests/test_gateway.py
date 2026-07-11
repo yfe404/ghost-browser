@@ -239,6 +239,41 @@ def test_nonstandard_websocket_path_is_not_guessed_as_release_id(monkeypatch):
             allocate_browser(gateway_url, timeout=2)
 
 
+def test_nonstandard_websocket_close_is_attempted_but_unconfirmed(monkeypatch):
+    from ghost_browser.gateway import GatewayError, allocate_browser
+
+    class WebSocket:
+        close_code = 1000
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def close(self, **_kwargs):
+            pass
+
+    captured = []
+    monkeypatch.setenv("APIFY_TOKEN", "caller-secret")
+    monkeypatch.setattr(
+        "ghost_browser.gateway.websocket_connect", lambda *_args, **_kwargs: WebSocket()
+    )
+    with fake_gateway(
+        browser_id=None,
+        ws_url="ws://127.0.0.1:9222/custom/opaque?token=ws-secret",
+    ) as (gateway_url, _requests):
+        with pytest.raises(GatewayError, match="no browser identifier"):
+            allocate_browser(
+                gateway_url,
+                timeout=2,
+                _on_unreleased=captured.append,
+            )
+
+    assert len(captured) == 1
+    assert captured[0].exact_owner is False
+
+
 def test_remote_gateway_cannot_redirect_to_plaintext_loopback(monkeypatch):
     from ghost_browser.gateway import GatewayError, allocate_browser
 

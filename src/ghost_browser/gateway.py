@@ -123,6 +123,7 @@ def _fail_successful_allocation(
             websocket_url,
             None,
             caller_token,
+            False,
         )
     if cleanup is None:
         if on_unreleased:
@@ -238,6 +239,10 @@ def release_browser(allocation: Allocation, *, timeout: float = 15) -> None:
                 if websocket.close_code != 1000:
                     raise GatewayError(
                         "gateway release failed: WebSocket close was abnormal"
+                    )
+                if not allocation.exact_owner:
+                    raise GatewayError(
+                        "gateway release could not be confirmed for an unsupported WebSocket contract"
                     )
         except GatewayError:
             raise
