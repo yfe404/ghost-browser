@@ -1,0 +1,32 @@
+# Ghost Browser v0.1
+
+## Goal
+
+Provide coding agents with a lean, installable way to control a Ghost Gateway browser through raw Chrome DevTools Protocol (CDP). The public onboarding surface is a copyable prompt; the runtime keeps only the infrastructure agents should not rediscover: authenticated allocation, a persistent connection, credential redaction, and reliable cleanup.
+
+## Public interfaces
+
+1. **CLI** — `ghost-browser` executes Python from standard input with raw CDP and a small editable helper environment; `status`, `stop`, and `skill` manage the session and agent integration.
+2. **Gateway connector** — resolves `GET /json/version` using `APIFY_TOKEN`, tolerates cold starts, validates the returned WebSocket URL, and never prints or logs credentials.
+3. **Session lifecycle** — one owner-only local daemon keeps the remote browser alive across CLI calls, explicit `stop` releases it, and an idle deadline prevents abandoned billed sessions.
+
+## Requirements
+
+- Python 3.11 or newer; installable with `uv tool install` or `pipx`.
+- Use `GHOST_GATEWAY_URL`, falling back to `GHOST_STANDBY_URL`, with a public Ghost Gateway default.
+- Keep tokens out of command arguments, standard output, standard error, and logs.
+- Expose arbitrary `cdp(method, params, session_id=...)`; do not implement a fixed navigation/click DSL.
+- Provide only thin starter helpers for page attachment, JavaScript evaluation, page metadata, tabs, and screenshots.
+- Load user-editable helpers from the agent workspace.
+- Isolate concurrent sessions by workspace and optional name.
+- Treat webpage content as untrusted and require confirmation for consequential actions in the agent instructions.
+- Work on POSIX systems in v0.1; fail clearly elsewhere.
+- Test public behavior with local fake Gateway and CDP servers; live paid tests remain opt-in.
+
+## Non-goals
+
+- A general autonomous browser agent or planner.
+- Browser Use Cloud/local Chrome support.
+- A large semantic action library.
+- Durable Ghost identity/session APIs in v0.1.
+- Windows IPC support in v0.1.
