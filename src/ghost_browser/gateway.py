@@ -7,7 +7,7 @@ import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
 
 
 DEFAULT_GATEWAY = "https://straightforward-under--ghost-gateway.apify.actor"
@@ -50,15 +50,25 @@ def _validate_gateway_url(value: str) -> None:
         raise GatewayError("gateway URL must use HTTPS unless it is local")
 
 
-def _validate_websocket_url(value: object) -> str:
+def _validate_websocket_url(value: object, gateway_url: str) -> str:
     if not isinstance(value, str):
         raise GatewayError("gateway allocation returned no WebSocket URL")
     parsed = urlsplit(value)
     if parsed.scheme not in {"ws", "wss"} or not parsed.hostname:
         raise GatewayError("gateway allocation returned an invalid WebSocket URL")
-    if parsed.scheme != "wss" and not _loopback(parsed.hostname):
+    gateway = urlsplit(gateway_url)
+    if parsed.scheme != "wss" and not (
+        _loopback(parsed.hostname) and _loopback(gateway.hostname)
+    ):
         raise GatewayError("gateway returned insecure WebSocket transport")
     return value
+
+
+def _browser_id_from_websocket(websocket_url: str) -> str | None:
+    parts = [part for part in urlsplit(websocket_url).path.split("/") if part]
+    if len(parts) >= 3 and parts[-3:-1] == ["devtools", "browser"]:
+        return unquote(parts[-1]) or None
+    return None
 
 
 def _allocation_url(gateway_url: str, token: str) -> str:
@@ -94,8 +104,12 @@ def allocate_browser(
             if len(raw) > 1_048_576:
                 raise GatewayError("gateway allocation response is too large")
             payload = json.loads(raw)
-            websocket_url = _validate_websocket_url(payload["webSocketDebuggerUrl"])
-            browser_id = response.headers.get("X-Ghost-Session")
+            websocket_url = _validate_websocket_url(
+                payload["webSocketDebuggerUrl"], gateway_url
+            )
+            browser_id = response.headers.get(
+                "X-Ghost-Session"
+            ) or _browser_id_from_websocket(websocket_url)
     except GatewayError:
         raise
     except urllib.error.HTTPError as error:

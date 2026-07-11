@@ -81,7 +81,9 @@ ghost-browser stop
 are `js`, `page_info`, `tabs`, `capture_screenshot`, `ensure_page`, and `drain_events`.
 
 Browser state persists across invocations in the same working directory. Use `GHOST_BROWSER_NAME` to run
-multiple isolated sessions in one workspace.
+multiple isolated sessions in one workspace. Run `status` and `stop` with the same working directory, name,
+Gateway configuration, and caller credential that started the session; the idle deadline is the backstop if
+that identity is no longer available.
 
 ```text
 ghost-browser                  execute Python from stdin
@@ -92,9 +94,10 @@ ghost-browser skill            print the optional agent skill
 ghost-browser --version        print the installed version
 ```
 
-The editable `agent_helpers.py` begins with coordinate click and text input helpers that use real CDP input.
-The protected package owns allocation, IPC, transport, redaction, and cleanup. An idle daemon releases its
-browser after ten minutes by default; `ghost-browser stop` is the normal end of every task.
+The project-scoped `agent_helpers.py` starts intentionally empty. Add a small helper only after the agent has
+proved it useful through raw CDP. The protected package owns allocation, IPC, transport, redaction, and
+cleanup. An idle daemon releases its browser after ten minutes by default; `ghost-browser stop` is the normal
+end of every task.
 
 ## Configuration
 
@@ -113,6 +116,8 @@ browser after ten minutes by default; `ghost-browser stop` is the normal end of 
 - The daemon socket and state directories are owner-only.
 - Caller tokens, returned WebSocket URLs, browser identifiers, and URL queries are excluded from logs and
   user-facing errors.
+- Python supplied on stdin and project-scoped helpers are trusted code running with the coding agent's existing
+  environment authority; Ghost Browser does not sandbox them.
 - A command that times out after sending is never replayed; its outcome is reported as unknown.
 - WebSocket close releases the browser, followed by an idempotent HTTP DELETE backstop.
 - Page content is untrusted. Consequential purchases, submissions, messages, uploads, account changes, and

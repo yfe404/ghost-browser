@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import json
 import os
 import signal
@@ -123,11 +124,16 @@ class CDPConnection:
         return events
 
     async def close(self) -> None:
-        with suppress(Exception):
+        close_error: Exception | None = None
+        try:
             await self.websocket.close(code=1000, reason="Ghost Browser released")
+        except Exception as error:
+            close_error = error
         if self.reader_task:
             with suppress(asyncio.CancelledError, Exception):
                 await self.reader_task
+        if close_error:
+            raise close_error
 
 
 class BrowserDaemon:
@@ -136,12 +142,16 @@ class BrowserDaemon:
         paths: SessionPaths,
         allocation: Allocation,
         cdp: CDPConnection,
+        stop: asyncio.Event,
+        ready: asyncio.Event,
     ) -> None:
         self.paths = paths
         self.allocation = allocation
         self.cdp = cdp
-        self.stop = asyncio.Event()
+        self.stop = stop
+        self.ready = ready
         self.last_activity = time.monotonic()
+        self.inflight = 0
         self.active_session: str | None = None
         self.active_target: str | None = None
         self.attach_lock = asyncio.Lock()
@@ -189,19 +199,27 @@ class BrowserDaemon:
                 "pid": os.getpid(),
             }
         if operation == "cdp":
-            self.last_activity = time.monotonic()
-            return await self.cdp.send(
-                request["method"],
-                request.get("params"),
-                session_id=request.get("session_id"),
-                timeout=float(request.get("timeout", 30)),
-            )
+            self.inflight += 1
+            try:
+                return await self.cdp.send(
+                    request["method"],
+                    request.get("params"),
+                    session_id=request.get("session_id"),
+                    timeout=float(request.get("timeout", 30)),
+                )
+            finally:
+                self.inflight -= 1
+                self.last_activity = time.monotonic()
         if operation == "drain_events":
             self.last_activity = time.monotonic()
             return self.cdp.drain_events()
         if operation == "ensure_page":
-            self.last_activity = time.monotonic()
-            return await self.ensure_page()
+            self.inflight += 1
+            try:
+                return await self.ensure_page()
+            finally:
+                self.inflight -= 1
+                self.last_activity = time.monotonic()
         if operation == "stop":
             asyncio.get_running_loop().call_soon(self.stop.set)
             return {"released": True}
@@ -243,6 +261,12 @@ class BrowserDaemon:
             1.0, float(os.environ.get("GHOST_BROWSER_IDLE_SECONDS", "600"))
         )
         while not self.stop.is_set():
+            if self.inflight:
+                try:
+                    await asyncio.wait_for(self.stop.wait(), timeout=0.1)
+                except TimeoutError:
+                    pass
+                continue
             remaining = idle_seconds - (time.monotonic() - self.last_activity)
             if remaining <= 0:
                 self.stop.set()
@@ -263,6 +287,7 @@ class BrowserDaemon:
             limit=MAX_MESSAGE_BYTES,
         )
         self.paths.socket.chmod(0o600)
+        self.ready.set()
         idle = asyncio.create_task(self.idle_watch(), name="ghost-idle-release")
         closed = asyncio.create_task(self.cdp.closed.wait(), name="ghost-cdp-closed")
         stopped = asyncio.create_task(self.stop.wait(), name="ghost-stop")
@@ -278,19 +303,60 @@ class BrowserDaemon:
         await self.server.wait_closed()
 
 
-async def run() -> None:
-    paths = session_paths()
-    allocation: Allocation | None = None
-    cdp: CDPConnection | None = None
-    started = False
-    paths.pid.write_text(str(os.getpid()), encoding="ascii")
-    paths.pid.chmod(0o600)
+class StartupCancelled(RuntimeError):
+    """The launching agent exited or requested cancellation."""
+
+
+def _parent_alive(parent_pid: int) -> bool:
+    if parent_pid <= 0:
+        return True
     try:
-        timeout = float(os.environ.get("GHOST_BROWSER_ALLOCATION_TIMEOUT", "180"))
-        allocation = await asyncio.to_thread(
-            allocate_browser, gateway_url_from_env(), timeout=timeout
-        )
-        websocket = await connect(
+        os.kill(parent_pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+async def _watch_startup(
+    paths: SessionPaths,
+    shutdown: asyncio.Event,
+    ready: asyncio.Event,
+) -> None:
+    parent_pid = int(os.environ.get("GHOST_BROWSER_PARENT_PID", "0"))
+    while not shutdown.is_set():
+        if paths.stop_requested.exists():
+            shutdown.set()
+            return
+        if not ready.is_set() and not _parent_alive(parent_pid):
+            shutdown.set()
+            return
+        await asyncio.sleep(0.05)
+
+
+async def _allocate_until_stopped(shutdown: asyncio.Event) -> Allocation:
+    timeout = float(os.environ.get("GHOST_BROWSER_ALLOCATION_TIMEOUT", "180"))
+    allocation_task = asyncio.create_task(
+        asyncio.to_thread(allocate_browser, gateway_url_from_env(), timeout=timeout)
+    )
+    stopped = asyncio.create_task(shutdown.wait())
+    done, _pending = await asyncio.wait(
+        {allocation_task, stopped}, return_when=asyncio.FIRST_COMPLETED
+    )
+    if allocation_task in done:
+        stopped.cancel()
+        with suppress(asyncio.CancelledError):
+            await stopped
+        return await allocation_task
+    return await allocation_task
+
+
+async def _connect_until_stopped(
+    allocation: Allocation, shutdown: asyncio.Event
+) -> Any:
+    connection = asyncio.ensure_future(
+        connect(
             allocation.websocket_url,
             open_timeout=float(os.environ.get("GHOST_BROWSER_WS_TIMEOUT", "30")),
             close_timeout=10,
@@ -299,17 +365,51 @@ async def run() -> None:
             max_size=32 * 1024 * 1024,
             proxy=None,
         )
+    )
+    stopped = asyncio.create_task(shutdown.wait())
+    done, _pending = await asyncio.wait(
+        {connection, stopped}, return_when=asyncio.FIRST_COMPLETED
+    )
+    if connection in done:
+        stopped.cancel()
+        with suppress(asyncio.CancelledError):
+            await stopped
+        return await connection
+    connection.cancel()
+    with suppress(asyncio.CancelledError, Exception):
+        await connection
+    raise StartupCancelled("browser startup cancelled before connection")
+
+
+async def run() -> None:
+    paths = session_paths()
+    allocation: Allocation | None = None
+    cdp: CDPConnection | None = None
+    shutdown = asyncio.Event()
+    ready = asyncio.Event()
+    websocket_released = False
+    delete_released = False
+    cleanup_error: Exception | None = None
+    paths.pid.write_text(str(os.getpid()), encoding="ascii")
+    paths.pid.chmod(0o600)
+    loop = asyncio.get_running_loop()
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        with suppress(NotImplementedError):
+            loop.add_signal_handler(signum, shutdown.set)
+    watcher = asyncio.create_task(
+        _watch_startup(paths, shutdown, ready), name="ghost-startup-watch"
+    )
+    try:
+        allocation = await _allocate_until_stopped(shutdown)
+        if shutdown.is_set():
+            raise StartupCancelled("browser startup cancelled after allocation")
+        websocket = await _connect_until_stopped(allocation, shutdown)
         cdp = CDPConnection(websocket)
         cdp.start()
-        daemon = BrowserDaemon(paths, allocation, cdp)
-        loop = asyncio.get_running_loop()
-        for signum in (signal.SIGINT, signal.SIGTERM):
-            with suppress(NotImplementedError):
-                loop.add_signal_handler(signum, daemon.stop.set)
-        started = True
+        daemon = BrowserDaemon(paths, allocation, cdp, shutdown, ready)
         await daemon.serve()
     except Exception as error:
-        if not started:
+        if not ready.is_set():
             paths.startup_error.write_text(
                 redact(
                     error,
@@ -321,20 +421,62 @@ async def run() -> None:
             )
             paths.startup_error.chmod(0o600)
     finally:
+        shutdown.set()
+        watcher.cancel()
+        with suppress(asyncio.CancelledError, Exception):
+            await watcher
         if cdp:
-            await cdp.close()
+            try:
+                await cdp.close()
+                websocket_released = True
+            except Exception as error:
+                cleanup_error = error
         if allocation:
-            with suppress(Exception):
+            try:
                 await asyncio.to_thread(release_browser, allocation)
-        for path in (paths.socket, paths.pid):
-            with suppress(FileNotFoundError):
-                path.unlink()
+                delete_released = True
+            except Exception as error:
+                cleanup_error = cleanup_error or error
+        released = allocation is None or websocket_released or delete_released
+        result = {"released": released}
+        if not released:
+            result["error"] = redact(
+                cleanup_error or "browser release outcome is unknown",
+                allocation.gateway_url if allocation else None,
+                allocation.websocket_url if allocation else None,
+                allocation.browser_id if allocation else None,
+            )
+        try:
+            paths.shutdown_result.write_text(
+                json.dumps(result, separators=(",", ":")), encoding="utf-8"
+            )
+            paths.shutdown_result.chmod(0o600)
+        finally:
+            for path in (paths.socket, paths.pid, paths.stop_requested):
+                with suppress(FileNotFoundError):
+                    path.unlink()
+
+
+def _lifetime_lock(paths: SessionPaths):
+    inherited = os.environ.get("GHOST_BROWSER_LOCK_FD")
+    if inherited is not None:
+        return os.fdopen(int(inherited), "r+")
+    paths.lock.touch(mode=0o600, exist_ok=True)
+    lock = paths.lock.open("r+")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock.close()
+        raise RuntimeError("another Ghost Browser daemon owns this session") from None
+    return lock
 
 
 def main() -> None:
     if os.name != "posix":
         raise SystemExit("Ghost Browser v0.1 requires a POSIX system")
-    asyncio.run(run())
+    paths = session_paths()
+    with _lifetime_lock(paths):
+        asyncio.run(run())
 
 
 if __name__ == "__main__":

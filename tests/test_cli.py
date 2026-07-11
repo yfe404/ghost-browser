@@ -1,5 +1,6 @@
 import json
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -49,6 +50,9 @@ def fake_cdp():
                 result = {"result": {"type": "string", "value": "Example"}}
             elif method == "Test.neverRespond":
                 continue
+            elif method == "Test.respondLate":
+                time.sleep(1.3)
+                result = {"ok": True}
             else:
                 result = {}
             websocket.send(json.dumps({"id": request["id"], "result": result}))
@@ -65,12 +69,14 @@ def fake_cdp():
 
 
 @contextmanager
-def fake_gateway(websocket_url):
+def fake_gateway(websocket_url, *, allocation_delay=0, delete_status=204):
     requests = []
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             requests.append((self.command, self.path))
+            if self.path.startswith("/json/version") and allocation_delay:
+                time.sleep(allocation_delay)
             resolved_websocket = websocket_url or (
                 f"ws://127.0.0.1:{self.server.server_port}"
                 "/devtools/browser/opaque?token=opaque-run-secret"
@@ -85,7 +91,7 @@ def fake_gateway(websocket_url):
 
         def do_DELETE(self):
             requests.append((self.command, self.path))
-            self.send_response(204)
+            self.send_response(delete_status)
             self.end_headers()
 
         def log_message(self, _format, *_args):
@@ -224,10 +230,9 @@ def test_editable_agent_helpers_are_seeded_and_loaded(tmp_path):
             run_cli(env, "stop")
 
     assert workspace_result.returncode == 0
-    assert "Input.dispatchMouseEvent" in seed
-    assert "mouseMoved" in seed
-    assert "Input.dispatchKeyEvent" in seed
-    assert "Input.insertText" not in seed
+    assert "Project-scoped helpers" in seed
+    assert "def click" not in seed
+    assert "def type" not in seed
     assert (executed.returncode, executed.stdout, executed.stderr) == (
         0,
         "editable\n",
@@ -323,6 +328,7 @@ def test_skill_and_status_do_not_allocate_a_browser(tmp_path):
         }
         skill = run_cli(env, "skill")
         status = run_cli(env, "status")
+        version = run_cli(env, "--version")
 
     assert skill.returncode == 0
     assert "name: ghost-browser" in skill.stdout
@@ -333,7 +339,14 @@ def test_skill_and_status_do_not_allocate_a_browser(tmp_path):
         "stopped\n",
         "",
     )
+    assert (version.returncode, version.stdout, version.stderr) == (
+        0,
+        "0.1.0\n",
+        "",
+    )
     assert gateway_requests == []
+    assert not (tmp_path / "home").exists()
+    assert not (tmp_path / "runtime").exists()
 
 
 def test_arbitrary_agent_exceptions_are_redacted(tmp_path):
@@ -354,7 +367,7 @@ def test_arbitrary_agent_exceptions_are_redacted(tmp_path):
                 env,
                 code=(
                     'raise KeyError("caller-secret at '
-                    'wss://run.example/path?token=opaque-secret")'
+                    'wss://run.example/path?token=opaque-secret&region=eu")'
                 ),
             )
         finally:
@@ -364,6 +377,7 @@ def test_arbitrary_agent_exceptions_are_redacted(tmp_path):
     assert "caller-secret" not in failed.stderr
     assert "opaque-secret" not in failed.stderr
     assert "token=" not in failed.stderr
+    assert "region=eu" not in failed.stderr
     assert "<redacted>" in failed.stderr
 
 
@@ -395,9 +409,58 @@ def test_sent_command_timeout_is_not_replayed(tmp_path):
     ) == 1
 
 
-def test_seed_input_helpers_use_ghost_humanization_path(tmp_path):
+def test_stop_cancels_a_cold_start_before_websocket_connect(tmp_path):
     with ExitStack() as stack:
-        websocket_url, messages, _connections = stack.enter_context(fake_cdp())
+        websocket_url, _messages, connections = stack.enter_context(fake_cdp())
+        gateway_url, gateway_requests = stack.enter_context(
+            fake_gateway(websocket_url, allocation_delay=0.8)
+        )
+        env = {
+            **os.environ,
+            "APIFY_TOKEN": "caller-secret",
+            "GHOST_GATEWAY_URL": gateway_url,
+            "GHOST_BROWSER_HOME": str(tmp_path / "home"),
+            "GHOST_BROWSER_RUNTIME_DIR": str(tmp_path / "runtime"),
+            "GHOST_BROWSER_ALLOCATION_TIMEOUT": "3",
+        }
+        process = subprocess.Popen(
+            [sys.executable, "-m", "ghost_browser.cli"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+        process.stdin.write('print(cdp("Browser.getVersion")["product"])')
+        process.stdin.close()
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if any(
+                method == "GET" and path.startswith("/json/version")
+                for method, path in gateway_requests
+            ):
+                break
+            time.sleep(0.02)
+        starting = run_cli(env, "status")
+        stopped = run_cli(env, "stop")
+        process.wait(timeout=10)
+        launch_stderr = process.stderr.read()
+
+    assert starting.stdout == "starting\n"
+    assert (stopped.returncode, stopped.stdout, stopped.stderr) == (
+        0,
+        "released browser\n",
+        "",
+    )
+    assert process.returncode == 1
+    assert "cancelled" in launch_stderr
+    assert len(connections) == 0
+    assert sum(method == "DELETE" for method, _path in gateway_requests) == 1
+
+
+def test_idle_deadline_waits_for_an_active_command(tmp_path):
+    with ExitStack() as stack:
+        websocket_url, _messages, _connections = stack.enter_context(fake_cdp())
         gateway_url, _gateway_requests = stack.enter_context(
             fake_gateway(websocket_url)
         )
@@ -407,25 +470,120 @@ def test_seed_input_helpers_use_ghost_humanization_path(tmp_path):
             "GHOST_GATEWAY_URL": gateway_url,
             "GHOST_BROWSER_HOME": str(tmp_path / "home"),
             "GHOST_BROWSER_RUNTIME_DIR": str(tmp_path / "runtime"),
+            "GHOST_BROWSER_IDLE_SECONDS": "1",
         }
         try:
-            executed = run_cli(env, code='click_at(10, 20)\ntype_text("ab")')
+            executed = run_cli(
+                env,
+                code='print(cdp("Test.respondLate", timeout=3)["ok"])',
+            )
         finally:
             run_cli(env, "stop")
 
-    assert executed.returncode == 0
-    inputs = [
-        message
-        for message in messages
-        if message["method"].startswith("Input.dispatch")
-    ]
-    assert [message["params"]["type"] for message in inputs] == [
-        "mouseMoved",
-        "mousePressed",
-        "mouseReleased",
-        "keyDown",
-        "keyUp",
-        "keyDown",
-        "keyUp",
-    ]
-    assert all(message.get("sessionId") == "session-1" for message in inputs)
+    assert (executed.returncode, executed.stdout, executed.stderr) == (
+        0,
+        "True\n",
+        "",
+    )
+
+
+def test_launcher_death_cancels_cold_start_and_releases_allocation(tmp_path):
+    with ExitStack() as stack:
+        websocket_url, _messages, connections = stack.enter_context(fake_cdp())
+        gateway_url, gateway_requests = stack.enter_context(
+            fake_gateway(websocket_url, allocation_delay=0.8)
+        )
+        env = {
+            **os.environ,
+            "APIFY_TOKEN": "caller-secret",
+            "GHOST_GATEWAY_URL": gateway_url,
+            "GHOST_BROWSER_HOME": str(tmp_path / "home"),
+            "GHOST_BROWSER_RUNTIME_DIR": str(tmp_path / "runtime"),
+            "GHOST_BROWSER_ALLOCATION_TIMEOUT": "3",
+        }
+        process = subprocess.Popen(
+            [sys.executable, "-m", "ghost_browser.cli"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+        process.stdin.write('print(cdp("Browser.getVersion")["product"])')
+        process.stdin.close()
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if any(
+                method == "GET" and path.startswith("/json/version")
+                for method, path in gateway_requests
+            ):
+                break
+            time.sleep(0.02)
+        process.kill()
+        process.wait(timeout=5)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if any(method == "DELETE" for method, _path in gateway_requests):
+                break
+            time.sleep(0.05)
+        status = run_cli(env, "status")
+
+    assert process.returncode != 0
+    assert status.stdout == "stopped\n"
+    assert len(connections) == 0
+    assert sum(method == "DELETE" for method, _path in gateway_requests) == 1
+
+
+def test_daemon_signal_uses_the_release_path(tmp_path):
+    with ExitStack() as stack:
+        websocket_url, _messages, _connections = stack.enter_context(fake_cdp())
+        gateway_url, gateway_requests = stack.enter_context(
+            fake_gateway(websocket_url)
+        )
+        runtime = tmp_path / "runtime"
+        env = {
+            **os.environ,
+            "APIFY_TOKEN": "caller-secret",
+            "GHOST_GATEWAY_URL": gateway_url,
+            "GHOST_BROWSER_HOME": str(tmp_path / "home"),
+            "GHOST_BROWSER_RUNTIME_DIR": str(runtime),
+        }
+        started = run_cli(
+            env,
+            code='print(cdp("Browser.getVersion")["product"])',
+        )
+        pid_file = next(runtime.glob("*.pid"))
+        os.kill(int(pid_file.read_text(encoding="ascii")), signal.SIGTERM)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if any(method == "DELETE" for method, _path in gateway_requests):
+                break
+            time.sleep(0.05)
+        status = run_cli(env, "status")
+
+    assert started.returncode == 0
+    assert status.stdout == "stopped\n"
+    assert sum(method == "DELETE" for method, _path in gateway_requests) == 1
+
+
+def test_failed_cleanup_is_reported_instead_of_false_release_success(tmp_path):
+    with fake_gateway(None, delete_status=500) as (gateway_url, gateway_requests):
+        env = {
+            **os.environ,
+            "APIFY_TOKEN": "caller-secret",
+            "GHOST_GATEWAY_URL": gateway_url,
+            "GHOST_BROWSER_HOME": str(tmp_path / "home"),
+            "GHOST_BROWSER_RUNTIME_DIR": str(tmp_path / "runtime"),
+            "GHOST_BROWSER_ALLOCATION_TIMEOUT": "2",
+            "GHOST_BROWSER_WS_TIMEOUT": "2",
+        }
+        failed_start = run_cli(env, code='print("never reached")')
+        status = run_cli(env, "status")
+        stopped = run_cli(env, "stop")
+
+    assert failed_start.returncode == 1
+    assert status.stdout == "release-failed\n"
+    assert stopped.returncode == 1
+    assert "gateway release failed: HTTP 500" in stopped.stderr
+    assert "released browser" not in stopped.stdout
+    assert sum(method == "DELETE" for method, _path in gateway_requests) == 2

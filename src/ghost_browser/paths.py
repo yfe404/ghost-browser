@@ -17,6 +17,8 @@ class SessionPaths:
     lock: Path
     pid: Path
     startup_error: Path
+    stop_requested: Path
+    shutdown_result: Path
     workspace: Path
 
 
@@ -50,7 +52,9 @@ def _runtime() -> Path:
     return Path(tempfile.gettempdir(), f"ghost-browser-{uid}").resolve()
 
 
-def session_paths(cwd: str | os.PathLike[str] | None = None) -> SessionPaths:
+def session_paths(
+    cwd: str | os.PathLike[str] | None = None, *, create: bool = True
+) -> SessionPaths:
     """Return secret-free paths unique to workspace, name, gateway, and caller."""
 
     workspace_root = Path(cwd or os.getcwd()).resolve()
@@ -70,21 +74,30 @@ def session_paths(cwd: str | os.PathLike[str] | None = None) -> SessionPaths:
         separators=(",", ":"),
     )
     key = hashlib.sha256(identity.encode()).hexdigest()[:24]
-    runtime = _private_directory(_runtime())
-    home = _private_directory(_home())
-    workspace = _private_directory(home / "agent-workspace")
+    runtime = _runtime()
+    home = _home()
+    if create:
+        runtime = _private_directory(runtime)
+        home = _private_directory(home)
+    workspace = home / "agent-workspaces" / key
+    if create:
+        workspace = _private_directory(workspace)
     prefix = runtime / f"ghost-{key}"
     socket_path = Path(f"{prefix}.sock")
     if len(os.fsencode(socket_path)) >= 100:
         uid = os.getuid() if hasattr(os, "getuid") else "user"
-        short_runtime = _private_directory(
-            Path(tempfile.gettempdir(), f"ghost-browser-{uid}").resolve()
-        )
+        short_runtime = Path(
+            tempfile.gettempdir(), f"ghost-browser-{uid}"
+        ).resolve()
+        if create:
+            short_runtime = _private_directory(short_runtime)
         socket_path = short_runtime / f"ghost-{key}.sock"
     return SessionPaths(
         socket=socket_path,
         lock=Path(f"{prefix}.lock"),
         pid=Path(f"{prefix}.pid"),
         startup_error=Path(f"{prefix}.error"),
+        stop_requested=Path(f"{prefix}.stop"),
+        shutdown_result=Path(f"{prefix}.result"),
         workspace=workspace,
     )

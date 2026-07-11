@@ -8,7 +8,15 @@ from importlib import resources
 
 from . import __version__
 from .client import BrowserClient, script_namespace
-from .ipc import ensure_daemon, ping, request, wait_until_stopped
+from .ipc import (
+    daemon_locked,
+    ensure_daemon,
+    ping,
+    read_shutdown_result,
+    request,
+    request_startup_stop,
+    wait_until_stopped,
+)
 from .paths import session_paths
 from .redaction import redact
 from .workspace import ensure_agent_helpers, load_agent_helpers
@@ -37,11 +45,25 @@ def _print_error(error: object) -> None:
 
 
 def _stop(paths) -> int:
-    if ping(paths) is None:
+    running = ping(paths)
+    if running is not None:
+        request(paths, {"op": "stop"}, timeout=5)
+    elif daemon_locked(paths):
+        request_startup_stop(paths)
+    else:
+        previous = read_shutdown_result(paths)
+        if previous and not previous.get("released"):
+            raise RuntimeError(
+                previous.get("error") or "browser release outcome is unknown"
+            )
         print("browser already stopped")
         return 0
-    request(paths, {"op": "stop"}, timeout=5)
     wait_until_stopped(paths)
+    result = read_shutdown_result(paths)
+    if not result or not result.get("released"):
+        raise RuntimeError(
+            (result or {}).get("error") or "browser release outcome is unknown"
+        )
     print("released browser")
     return 0
 
@@ -61,25 +83,32 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     arguments = list(sys.argv[1:] if argv is None else argv)
     try:
-        paths = session_paths()
         if arguments == ["--version"]:
             print(__version__)
             return 0
+        if arguments == ["skill"]:
+            print(_skill_text(), end="")
+            return 0
+        read_only = arguments in (["status"], ["stop"])
+        paths = session_paths(create=not read_only)
         if arguments == ["status"]:
             state = ping(paths)
-            if state is None:
-                print("stopped")
-            else:
+            if state is not None:
                 print(f"connected {state['gateway']}")
+            elif daemon_locked(paths):
+                print("starting")
+            elif (result := read_shutdown_result(paths)) and not result.get(
+                "released"
+            ):
+                print("release-failed")
+            else:
+                print("stopped")
             return 0
         if arguments == ["stop"]:
             return _stop(paths)
         if arguments == ["workspace"]:
             ensure_agent_helpers(paths)
             print(paths.workspace)
-            return 0
-        if arguments == ["skill"]:
-            print(_skill_text(), end="")
             return 0
         if arguments:
             print(USAGE, file=sys.stderr, end="")

@@ -11,6 +11,7 @@ def fake_gateway(
     *,
     ws_url="ws://127.0.0.1:9222/devtools/browser/opaque?token=ws-secret",
     status=200,
+    browser_id="browser-42",
 ):
     requests = []
 
@@ -28,7 +29,8 @@ def fake_gateway(
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))
-            self.send_header("X-Ghost-Session", "browser-42")
+            if browser_id is not None:
+                self.send_header("X-Ghost-Session", browser_id)
             self.end_headers()
             self.wfile.write(payload)
 
@@ -123,3 +125,41 @@ def test_remote_plaintext_gateway_is_rejected_without_a_request(monkeypatch):
     monkeypatch.setenv("APIFY_TOKEN", "caller-secret")
     with pytest.raises(GatewayError, match="must use HTTPS"):
         allocate_browser("http://gateway.example", timeout=2)
+
+
+def test_missing_session_header_falls_back_to_websocket_browser_id(monkeypatch):
+    from ghost_browser.gateway import allocate_browser
+
+    monkeypatch.setenv("APIFY_TOKEN", "caller-secret")
+    with fake_gateway(browser_id=None) as (gateway_url, _requests):
+        allocation = allocate_browser(gateway_url, timeout=2)
+
+    assert allocation.browser_id == "opaque"
+
+
+def test_remote_gateway_cannot_redirect_to_plaintext_loopback(monkeypatch):
+    from ghost_browser.gateway import GatewayError, allocate_browser
+
+    class Response:
+        headers = {"X-Ghost-Session": "browser-42"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def read(self, _limit):
+            return json.dumps(
+                {
+                    "webSocketDebuggerUrl": (
+                        "ws://127.0.0.1:9222/devtools/browser/opaque?token=secret"
+                    )
+                }
+            ).encode()
+
+    monkeypatch.setenv("APIFY_TOKEN", "caller-secret")
+    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: Response())
+
+    with pytest.raises(GatewayError, match="insecure WebSocket"):
+        allocate_browser("https://gateway.example", timeout=2)

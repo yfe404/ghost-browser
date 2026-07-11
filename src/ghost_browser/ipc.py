@@ -9,6 +9,7 @@ import socket
 import subprocess
 import sys
 import time
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -72,6 +73,54 @@ def _read_startup_error(path: Path) -> str | None:
         return None
 
 
+def daemon_locked(paths: SessionPaths) -> bool:
+    """Whether a starting or connected daemon owns the lifetime lock."""
+
+    try:
+        lock = paths.lock.open("r+")
+    except OSError:
+        return False
+    try:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        return False
+    finally:
+        lock.close()
+
+
+def request_startup_stop(paths: SessionPaths) -> None:
+    paths.stop_requested.touch(mode=0o600, exist_ok=True)
+    paths.stop_requested.chmod(0o600)
+
+
+def read_shutdown_result(paths: SessionPaths) -> dict[str, Any] | None:
+    try:
+        result = json.loads(paths.shutdown_result.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError):
+        return None
+    return result if isinstance(result, dict) else None
+
+
+def _startup_deadline() -> float:
+    allocation = float(os.environ.get("GHOST_BROWSER_ALLOCATION_TIMEOUT", "180"))
+    websocket = float(os.environ.get("GHOST_BROWSER_WS_TIMEOUT", "30"))
+    return time.monotonic() + allocation + websocket + 10
+
+
+def _wait_for_existing(paths: SessionPaths, deadline: float) -> dict[str, Any]:
+    while time.monotonic() < deadline:
+        if running := ping(paths):
+            return running
+        if not daemon_locked(paths):
+            detail = _read_startup_error(paths.startup_error)
+            raise IPCError(detail or "browser daemon stopped during startup")
+        time.sleep(0.05)
+    raise IPCError("browser daemon is running but did not become ready")
+
+
 def ensure_daemon(paths: SessionPaths) -> dict[str, Any]:
     """Start one daemon under an exclusive per-session lock, then wait for it."""
 
@@ -79,45 +128,69 @@ def ensure_daemon(paths: SessionPaths) -> dict[str, Any]:
         return running
     paths.lock.touch(mode=0o600, exist_ok=True)
     with paths.lock.open("r+") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return _wait_for_existing(paths, _startup_deadline())
         if running := ping(paths):
             return running
-        try:
-            paths.socket.unlink()
-        except FileNotFoundError:
-            pass
-        try:
-            paths.startup_error.unlink()
-        except FileNotFoundError:
-            pass
+        for stale in (
+            paths.socket,
+            paths.startup_error,
+            paths.stop_requested,
+            paths.shutdown_result,
+        ):
+            with suppress(FileNotFoundError):
+                stale.unlink()
+        child_env = os.environ.copy()
+        child_env["GHOST_BROWSER_LOCK_FD"] = str(lock.fileno())
+        child_env["GHOST_BROWSER_PARENT_PID"] = str(os.getpid())
         process = subprocess.Popen(
             [sys.executable, "-m", "ghost_browser.daemon"],
             cwd=os.getcwd(),
-            env=os.environ.copy(),
+            env=child_env,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             close_fds=True,
+            pass_fds=(lock.fileno(),),
             start_new_session=True,
         )
-        allocation_timeout = float(
+        try:
+            deadline = _startup_deadline()
+            while time.monotonic() < deadline:
+                if running := ping(paths):
+                    return running
+                if process.poll() is not None:
+                    detail = _read_startup_error(paths.startup_error)
+                    raise IPCError(detail or "browser daemon failed to start")
+                time.sleep(0.05)
+            request_startup_stop(paths)
+            with suppress(subprocess.TimeoutExpired):
+                process.wait(timeout=5)
+            raise IPCError("browser daemon did not become ready before timeout")
+        except BaseException:
+            if process.poll() is None:
+                request_startup_stop(paths)
+            raise
+
+
+def wait_until_stopped(
+    paths: SessionPaths, *, timeout: float | None = None
+) -> None:
+    if timeout is None:
+        allocation = float(
             os.environ.get("GHOST_BROWSER_ALLOCATION_TIMEOUT", "180")
         )
-        deadline = time.monotonic() + allocation_timeout + 40
-        while time.monotonic() < deadline:
-            if running := ping(paths):
-                return running
-            if process.poll() is not None:
-                detail = _read_startup_error(paths.startup_error)
-                raise IPCError(detail or "browser daemon failed to start")
-            time.sleep(0.05)
-        raise IPCError("browser daemon did not become ready before timeout")
-
-
-def wait_until_stopped(paths: SessionPaths, *, timeout: float = 20) -> None:
+        websocket = float(os.environ.get("GHOST_BROWSER_WS_TIMEOUT", "30"))
+        timeout = allocation + websocket + 15
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if ping(paths) is None and not paths.socket.exists():
+        if (
+            ping(paths) is None
+            and not paths.socket.exists()
+            and not daemon_locked(paths)
+        ):
             return
         time.sleep(0.05)
     raise IPCError("browser daemon did not stop before timeout")

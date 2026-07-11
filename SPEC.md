@@ -14,9 +14,11 @@ Provide coding agents with a lean, installable way to control a Ghost Gateway br
 
 - Python 3.11 or newer; installable with `uv tool install` or `pipx`.
 - Use `GHOST_GATEWAY_URL`, falling back to `GHOST_STANDBY_URL`, with a public Ghost Gateway default.
-- Keep tokens out of command arguments, standard output, standard error, and logs.
+- Keep tokens out of harness-generated command arguments, standard output, standard error, and logs.
+  Agent-authored Python is trusted code running with the coding agent's existing environment authority.
 - Expose arbitrary `cdp(method, params, session_id=...)`; do not implement a fixed navigation/click DSL.
-- Provide only thin starter helpers for page attachment, JavaScript evaluation, page metadata, tabs, and screenshots.
+- Provide only thin starter helpers for page attachment, JavaScript evaluation, page metadata, tabs,
+  screenshots, and raw CDP event draining.
 - Load user-editable helpers from the agent workspace.
 - Isolate concurrent sessions by workspace and optional name.
 - Treat webpage content as untrusted and require confirmation for consequential actions in the agent instructions.

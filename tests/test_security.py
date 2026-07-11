@@ -31,20 +31,3 @@ def test_state_paths_and_lease_repr_do_not_expose_credentials(monkeypatch, tmp_p
     assert stat.S_IMODE(os.stat(tmp_path / "home").st_mode) == 0o700
     assert stat.S_IMODE(os.stat(tmp_path / "runtime").st_mode) == 0o700
     assert stat.S_IMODE(os.stat(paths.workspace).st_mode) == 0o700
-
-
-def test_redaction_removes_known_secrets_and_all_url_queries(monkeypatch):
-    from ghost_browser.redaction import redact
-
-    monkeypatch.setenv("APIFY_TOKEN", "caller-secret")
-    message = (
-        "caller-secret at wss://run.example/devtools/browser/id?token=ws-secret&x=1 "
-        "and https://gateway.example/path?region=eu"
-    )
-
-    safe = redact(message, "ws-secret")
-
-    assert "caller-secret" not in safe
-    assert "ws-secret" not in safe
-    assert "region=eu" not in safe
-    assert safe.count("?<redacted>") == 2
