@@ -39,10 +39,10 @@ After setup, open https://sentinel-bot-detector.vercel.app/. Interact through re
 </details>
 
 <details>
-<summary><strong>Try the reCAPTCHA v3 interaction demo</strong></summary>
+<summary><strong>Try the fingerprint-verdict demo</strong></summary>
 
 ```text
-After setup, open https://2captcha.com/demo/recaptcha-v3. Inspect the page, then click the visible “Check” control through real CDP pointer input. Wait for the page to show its result, save a final screenshot as ghost-browser-recaptcha-v3-demo.png, report the visible score or status, then stop the browser and confirm that `ghost-browser status` reports `stopped`. Do not use a CAPTCHA-solving service or submit any production form.
+After setup, open https://deviceandbrowserinfo.com/are_you_a_bot and wait until its fingerprint verdict is visible. Save a final screenshot as ghost-browser-fingerprint-verdict.png. Report the exact visible verdict heading (for example, “You are human!”), the `isBot` value from the raw detection details, and any detection fields whose value is `true`. Then stop the browser and confirm that `ghost-browser status` reports `stopped`.
 ```
 
 </details>
