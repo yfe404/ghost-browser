@@ -2,7 +2,7 @@
 
 ## Goal
 
-Provide coding agents with a lean, installable way to control a Ghost Gateway browser through raw Chrome DevTools Protocol (CDP). The public onboarding surface is a copyable prompt; the runtime keeps only the infrastructure agents should not rediscover: authenticated allocation, a persistent connection, credential redaction, and reliable cleanup.
+Provide coding agents with a lean, installable way to control a Ghost Gateway browser through raw Chrome DevTools Protocol (CDP). The primary onboarding surface is a copyable prompt; the runtime keeps only the infrastructure agents should not rediscover: authenticated allocation, a persistent connection, credential redaction, and reliable cleanup.
 
 ## Public interfaces
 
@@ -13,7 +13,7 @@ Provide coding agents with a lean, installable way to control a Ghost Gateway br
 ## Requirements
 
 - Python 3.11 or newer; installable with `uv tool install` or `pipx`.
-- Use `GHOST_GATEWAY_URL`, falling back to `GHOST_STANDBY_URL`, with a public Ghost Gateway default.
+- Use `GHOST_GATEWAY_URL`, falling back to `GHOST_STANDBY_URL`, with a hosted Ghost Gateway default.
 - Require successful allocation responses to provide `X-Ghost-Session` or an exact
   `/devtools/browser/{id}` URL. Reject an allocation without a usable release capability and report its
   release as unconfirmed.

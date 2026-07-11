@@ -1,6 +1,6 @@
 ---
 name: ghost-browser
-description: Uses a private stealth Chromium through Ghost Gateway for live web interaction, JavaScript rendering, inspection, screenshots, and multi-step browser state.
+description: Uses isolated stealth Chromium through Ghost Gateway for live web interaction, JavaScript rendering, inspection, screenshots, and multi-step browser state.
 ---
 
 # Ghost Browser

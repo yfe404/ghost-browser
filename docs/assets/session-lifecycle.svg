@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="690" viewBox="0 0 1440 690" role="img" aria-labelledby="title desc">
+  <title id="title">One allocation, many CDP calls, one confirmed release</title>
+  <desc id="desc">A binary lifecycle chart shows no remote browser before allocation, one held browser reused across several CDP calls, then cleanup and confirmed release. An unconfirmed release becomes release-failed and retries cleanup.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#081426"/>
+      <stop offset="1" stop-color="#111a32"/>
+    </linearGradient>
+    <linearGradient id="held" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2ed7c6" stop-opacity=".28"/>
+      <stop offset="1" stop-color="#2ed7c6" stop-opacity=".02"/>
+    </linearGradient>
+    <pattern id="grid" width="36" height="36" patternUnits="userSpaceOnUse">
+      <path d="M36 0H0V36" fill="none" stroke="#b7c5e0" stroke-opacity=".045"/>
+    </pattern>
+    <filter id="glow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="7" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <marker id="arrowCoral" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10Z" fill="#ff8e70"/>
+    </marker>
+  </defs>
+
+  <rect width="1440" height="690" rx="34" fill="url(#bg)"/>
+  <rect width="1440" height="690" rx="34" fill="url(#grid)"/>
+
+  <text x="76" y="82" fill="#f5f7ff" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="38" font-weight="700">One allocation. Many CDP calls. One confirmed release.</text>
+  <text x="76" y="122" fill="#93a6c7" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="20">The local daemon keeps one browser alive for a workspace/name identity.</text>
+
+  <g font-family="Inter, ui-sans-serif, system-ui, sans-serif">
+    <text x="82" y="246" fill="#8ca0c1" font-size="18" font-weight="650">BROWSER HELD</text>
+    <text x="82" y="514" fill="#8ca0c1" font-size="18" font-weight="650">NO BROWSER</text>
+
+    <line x1="198" y1="240" x2="1340" y2="240" stroke="#a4b5d0" stroke-opacity=".16"/>
+    <line x1="198" y1="508" x2="1340" y2="508" stroke="#a4b5d0" stroke-opacity=".16"/>
+    <line x1="198" y1="552" x2="1340" y2="552" stroke="#a4b5d0" stroke-opacity=".26"/>
+
+    <path d="M210 508H330V240H1130V508H1325V552H210Z" fill="url(#held)"/>
+    <path d="M210 508H330V240H1130V508H1325" fill="none" stroke="#38d9c8" stroke-width="6" stroke-linejoin="round"/>
+
+    <g fill="#38d9c8" filter="url(#glow)">
+      <circle cx="330" cy="240" r="10"/>
+      <circle cx="540" cy="240" r="9"/>
+      <circle cx="735" cy="240" r="9"/>
+      <circle cx="930" cy="240" r="9"/>
+      <circle cx="1130" cy="240" r="10"/>
+      <circle cx="1130" cy="508" r="10"/>
+    </g>
+
+    <g fill="#dfe9f9" font-size="19" font-weight="650">
+      <text x="210" y="591" text-anchor="middle">stopped</text>
+      <text x="330" y="591" text-anchor="middle">allocate</text>
+      <text x="540" y="591" text-anchor="middle">CDP call</text>
+      <text x="735" y="591" text-anchor="middle">CDP call</text>
+      <text x="930" y="591" text-anchor="middle">CDP call</text>
+      <text x="1130" y="591" text-anchor="middle">stop / idle</text>
+      <text x="1325" y="591" text-anchor="middle">stopped</text>
+    </g>
+
+    <text x="330" y="204" text-anchor="middle" fill="#bffcf4" font-size="18">GET /json/version + WSS</text>
+    <text x="735" y="204" text-anchor="middle" fill="#bffcf4" font-size="18">same persistent session</text>
+
+    <rect x="1018" y="308" width="306" height="86" rx="20" fill="#171d36" stroke="#9c82ff" stroke-opacity=".45"/>
+    <text x="1171" y="342" text-anchor="middle" fill="#eee9ff" font-size="18" font-weight="650">CLEANUP</text>
+    <text x="1171" y="370" text-anchor="middle" fill="#aebbe0" font-size="16">normal WS close + exact-owner DELETE</text>
+    <path d="M1130 252V307" fill="none" stroke="#9c82ff" stroke-width="3"/>
+    <path d="M1171 395V468Q1171 508 1132 508" fill="none" stroke="#9c82ff" stroke-width="3"/>
+
+    <rect x="726" y="425" width="252" height="66" rx="18" fill="#35202b" stroke="#ff8e70" stroke-opacity=".55"/>
+    <circle cx="760" cy="458" r="8" fill="#ff8e70" filter="url(#glow)"/>
+    <text x="785" y="465" fill="#ffe1d9" font-size="18" font-weight="650">release-failed</text>
+    <path d="M1113 387C1050 407 1019 444 980 455" fill="none" stroke="#ff8e70" stroke-width="3" stroke-dasharray="7 8" marker-end="url(#arrowCoral)"/>
+    <path d="M851 425C871 372 923 347 1016 347" fill="none" stroke="#ff8e70" stroke-width="3" stroke-dasharray="7 8" marker-end="url(#arrowCoral)"/>
+    <text x="870" y="402" text-anchor="middle" fill="#ffb5a3" font-size="15">automatic or explicit retry</text>
+
+    <rect x="250" y="624" width="940" height="38" rx="19" fill="#0f2732" stroke="#2ed7c6" stroke-opacity=".24"/>
+    <text x="720" y="649" text-anchor="middle" fill="#b9eee7" font-size="16">Explicit stop is normal. The default 10-minute idle deadline is the abandoned-session backstop.</text>
+  </g>
+</svg>

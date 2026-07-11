@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "Ghost Browser contributors" }]
-keywords = ["agent", "browser", "cdp", "ghost", "stealth"]
+keywords = ["agent", "browser", "cdp", "chromium", "ghost", "stealth"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "License :: OSI Approved :: MIT License",

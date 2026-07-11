@@ -21,16 +21,18 @@ Or with pipx:
 pipx install --python python3.12 --editable .
 ```
 
-From the published repository:
+From the private Apify repository when no checkout exists:
 
 ```sh
-uv tool install --python 3.12 --upgrade git+https://github.com/yfe404/ghost-browser.git
+gh repo clone apify/ghost-browser
+uv tool install --python 3.12 --editable ./ghost-browser
 ```
 
 Or with pipx:
 
 ```sh
-pipx install --python python3.12 git+https://github.com/yfe404/ghost-browser.git
+gh repo clone apify/ghost-browser
+pipx install --python python3.12 --editable ./ghost-browser
 ```
 
 ## 3. Register the optional skill

@@ -5,3 +5,4 @@ __pycache__/
 dist/
 build/
 *.png
+!docs/assets/ghost-browser-hero.png

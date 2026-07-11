@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="790" viewBox="0 0 1440 790" role="img" aria-labelledby="title desc">
+  <title id="title">A thin browser harness by design</title>
+  <desc id="desc">A categorical matrix assigns task reasoning, raw CDP actions, and reusable helpers to the coding agent. It assigns authenticated allocation, persistent transport, credential redaction, and confirmed cleanup to Ghost Browser.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#081426"/>
+      <stop offset="1" stop-color="#101a33"/>
+    </linearGradient>
+    <linearGradient id="agent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#2ed7c6"/>
+      <stop offset="1" stop-color="#61b9ff"/>
+    </linearGradient>
+    <linearGradient id="harness" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#8e7dff"/>
+      <stop offset="1" stop-color="#ff8e70"/>
+    </linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#b7c5e0" stroke-opacity=".045"/>
+    </pattern>
+    <filter id="glow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1440" height="790" rx="34" fill="url(#bg)"/>
+  <rect width="1440" height="790" rx="34" fill="url(#grid)"/>
+
+  <text x="76" y="84" fill="#f5f7ff" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="38" font-weight="700">A thin harness by design</text>
+  <text x="76" y="124" fill="#93a6c7" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="20">Open-ended browser logic. Hardened infrastructure.</text>
+
+  <rect x="772" y="62" width="250" height="62" rx="18" fill="#102a36" stroke="#2ed7c6" stroke-opacity=".32"/>
+  <circle cx="808" cy="93" r="9" fill="#2ed7c6" filter="url(#glow)"/>
+  <text x="833" y="100" fill="#d9fff9" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="20" font-weight="650">Coding agent owns</text>
+
+  <rect x="1040" y="62" width="324" height="62" rx="18" fill="#231d3d" stroke="#9c82ff" stroke-opacity=".38"/>
+  <circle cx="1076" cy="93" r="9" fill="#9c82ff" filter="url(#glow)"/>
+  <text x="1101" y="100" fill="#eee9ff" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="20" font-weight="650">Ghost Browser owns</text>
+
+  <rect x="70" y="162" width="1298" height="498" rx="28" fill="#0c172b" stroke="#90a5c9" stroke-opacity=".18"/>
+  <line x1="724" y1="162" x2="724" y2="660" stroke="#90a5c9" stroke-opacity=".14"/>
+  <line x1="1031" y1="162" x2="1031" y2="660" stroke="#90a5c9" stroke-opacity=".14"/>
+
+  <g font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="23">
+    <g fill="#e9eefb">
+      <text x="112" y="220">Task reasoning</text>
+      <text x="112" y="288">Browser actions via raw CDP</text>
+      <text x="112" y="356">Reusable conveniences in agent_helpers.py</text>
+      <text x="112" y="424">Authenticated allocation</text>
+      <text x="112" y="492">Persistent WebSocket + owner-only IPC</text>
+      <text x="112" y="560">Credential and connection-detail redaction</text>
+      <text x="112" y="628">Exact-owner release + in-memory retry</text>
+    </g>
+
+    <g fill="none" stroke="#90a5c9" stroke-opacity=".13">
+      <line x1="94" y1="242" x2="1344" y2="242"/>
+      <line x1="94" y1="310" x2="1344" y2="310"/>
+      <line x1="94" y1="378" x2="1344" y2="378"/>
+      <line x1="94" y1="446" x2="1344" y2="446"/>
+      <line x1="94" y1="514" x2="1344" y2="514"/>
+      <line x1="94" y1="582" x2="1344" y2="582"/>
+    </g>
+
+    <g fill="#2ed7c6" filter="url(#glow)">
+      <circle cx="878" cy="211" r="11"/>
+      <circle cx="878" cy="279" r="11"/>
+      <circle cx="878" cy="347" r="11"/>
+    </g>
+    <g fill="#9c82ff" filter="url(#glow)">
+      <circle cx="1198" cy="415" r="11"/>
+      <circle cx="1198" cy="483" r="11"/>
+      <circle cx="1198" cy="551" r="11"/>
+      <circle cx="1198" cy="619" r="11"/>
+    </g>
+
+    <g fill="#536681" font-size="20">
+      <text x="1191" y="218">—</text>
+      <text x="1191" y="286">—</text>
+      <text x="1191" y="354">—</text>
+      <text x="871" y="422">—</text>
+      <text x="871" y="490">—</text>
+      <text x="871" y="558">—</text>
+      <text x="871" y="626">—</text>
+    </g>
+  </g>
+
+  <rect x="70" y="688" width="632" height="64" rx="20" fill="#102a36" stroke="#2ed7c6" stroke-opacity=".28"/>
+  <rect x="736" y="688" width="632" height="64" rx="20" fill="#231d3d" stroke="#9c82ff" stroke-opacity=".32"/>
+  <text x="386" y="729" text-anchor="middle" fill="#c9fff7" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="21" font-weight="650" letter-spacing=".6">OPEN ACTION SPACE</text>
+  <text x="1052" y="729" text-anchor="middle" fill="#eee9ff" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="21" font-weight="650" letter-spacing=".6">HARDENED INVARIANTS</text>
+</svg>
