@@ -12,7 +12,7 @@ from websockets.sync.server import serve
 
 
 @contextmanager
-def fake_cdp():
+def fake_cdp(*, disconnect_abnormally_after=None):
     messages = []
     connections = []
 
@@ -22,6 +22,9 @@ def fake_cdp():
             request = json.loads(raw)
             messages.append(request)
             method = request["method"]
+            if method == disconnect_abnormally_after:
+                websocket.close_socket()
+                return
             if method == "Target.getTargets":
                 result = {
                     "targetInfos": [
@@ -69,7 +72,9 @@ def fake_cdp():
 
 
 @contextmanager
-def fake_gateway(websocket_url, *, allocation_delay=0, delete_status=204):
+def fake_gateway(
+    websocket_url, *, allocation_delay=0, delete_status=204, raw_body=None
+):
     requests = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -81,7 +86,13 @@ def fake_gateway(websocket_url, *, allocation_delay=0, delete_status=204):
                 f"ws://127.0.0.1:{self.server.server_port}"
                 "/devtools/browser/opaque?token=opaque-run-secret"
             )
-            body = json.dumps({"webSocketDebuggerUrl": resolved_websocket}).encode()
+            body = (
+                raw_body
+                if raw_body is not None
+                else json.dumps(
+                    {"webSocketDebuggerUrl": resolved_websocket}
+                ).encode()
+            )
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -91,7 +102,8 @@ def fake_gateway(websocket_url, *, allocation_delay=0, delete_status=204):
 
         def do_DELETE(self):
             requests.append((self.command, self.path))
-            self.send_response(delete_status)
+            status = delete_status() if callable(delete_status) else delete_status
+            self.send_response(status)
             self.end_headers()
 
         def log_message(self, _format, *_args):
@@ -586,4 +598,149 @@ def test_failed_cleanup_is_reported_instead_of_false_release_success(tmp_path):
     assert stopped.returncode == 1
     assert "gateway release failed: HTTP 500" in stopped.stderr
     assert "released browser" not in stopped.stdout
-    assert sum(method == "DELETE" for method, _path in gateway_requests) == 2
+    assert sum(method == "DELETE" for method, _path in gateway_requests) == 4
+
+
+def test_failed_release_can_be_retried_by_stop(tmp_path):
+    delete = {"status": 500}
+    runtime = tmp_path / "runtime"
+    with fake_gateway(None, delete_status=lambda: delete["status"]) as (
+        gateway_url,
+        gateway_requests,
+    ):
+        env = {
+            **os.environ,
+            "APIFY_TOKEN": "caller-secret",
+            "GHOST_GATEWAY_URL": gateway_url,
+            "GHOST_BROWSER_HOME": str(tmp_path / "home"),
+            "GHOST_BROWSER_RUNTIME_DIR": str(runtime),
+            "GHOST_BROWSER_ALLOCATION_TIMEOUT": "2",
+            "GHOST_BROWSER_WS_TIMEOUT": "2",
+        }
+        failed_start = run_cli(env, code='print("never reached")')
+        first_stop = run_cli(env, "stop")
+        release_handle = next(runtime.glob("*.release"))
+        release_state = release_handle.read_text(encoding="utf-8")
+        release_mode = release_handle.stat().st_mode & 0o777
+        delete["status"] = 204
+        retried_stop = run_cli(env, "stop")
+
+    assert failed_start.returncode == 1
+    assert first_stop.returncode == 1
+    assert "released browser" not in first_stop.stdout
+    assert "caller-secret" not in release_state
+    assert release_mode == 0o600
+    assert not release_handle.exists()
+    assert (retried_stop.returncode, retried_stop.stdout, retried_stop.stderr) == (
+        0,
+        "released browser\n",
+        "",
+    )
+    assert sum(method == "DELETE" for method, _path in gateway_requests) >= 5
+
+
+def test_malformed_allocation_retains_failed_release_for_retry(tmp_path):
+    delete = {"status": 500}
+    with fake_gateway(
+        None,
+        raw_body=b"{not-json",
+        delete_status=lambda: delete["status"],
+    ) as (gateway_url, gateway_requests):
+        env = {
+            **os.environ,
+            "APIFY_TOKEN": "caller-secret",
+            "GHOST_GATEWAY_URL": gateway_url,
+            "GHOST_BROWSER_HOME": str(tmp_path / "home"),
+            "GHOST_BROWSER_RUNTIME_DIR": str(tmp_path / "runtime"),
+            "GHOST_BROWSER_ALLOCATION_TIMEOUT": "2",
+        }
+        failed_start = run_cli(env, code='print("never reached")')
+        status = run_cli(env, "status")
+        delete["status"] = 204
+        stopped = run_cli(env, "stop")
+
+    assert failed_start.returncode == 1
+    assert "invalid response" in failed_start.stderr
+    assert status.stdout == "release-failed\n"
+    assert (stopped.returncode, stopped.stdout, stopped.stderr) == (
+        0,
+        "released browser\n",
+        "",
+    )
+    assert sum(method == "DELETE" for method, _path in gateway_requests) >= 3
+
+
+def test_abnormal_websocket_close_is_not_false_release_success(tmp_path):
+    with ExitStack() as stack:
+        websocket_url, _messages, _connections = stack.enter_context(
+            fake_cdp(disconnect_abnormally_after="Browser.getVersion")
+        )
+        gateway_url, gateway_requests = stack.enter_context(
+            fake_gateway(websocket_url, delete_status=500)
+        )
+        env = {
+            **os.environ,
+            "APIFY_TOKEN": "caller-secret",
+            "GHOST_GATEWAY_URL": gateway_url,
+            "GHOST_BROWSER_HOME": str(tmp_path / "home"),
+            "GHOST_BROWSER_RUNTIME_DIR": str(tmp_path / "runtime"),
+        }
+        failed = run_cli(
+            env,
+            code='cdp("Browser.getVersion", session_id=None)',
+        )
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            status = run_cli(env, "status")
+            if status.stdout == "release-failed\n":
+                break
+            time.sleep(0.05)
+
+    assert failed.returncode == 1
+    assert status.stdout == "release-failed\n"
+    assert sum(method == "DELETE" for method, _path in gateway_requests) == 1
+
+
+def test_launcher_death_before_first_cdp_command_releases_ready_browser(tmp_path):
+    with ExitStack() as stack:
+        websocket_url, _messages, connections = stack.enter_context(fake_cdp())
+        gateway_url, gateway_requests = stack.enter_context(
+            fake_gateway(websocket_url)
+        )
+        env = {
+            **os.environ,
+            "APIFY_TOKEN": "caller-secret",
+            "GHOST_GATEWAY_URL": gateway_url,
+            "GHOST_BROWSER_HOME": str(tmp_path / "home"),
+            "GHOST_BROWSER_RUNTIME_DIR": str(tmp_path / "runtime"),
+            "GHOST_BROWSER_IDLE_SECONDS": "60",
+        }
+        process = subprocess.Popen(
+            [sys.executable, "-m", "ghost_browser.cli"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+        process.stdin.write("import time; time.sleep(10)")
+        process.stdin.close()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if run_cli(env, "status").stdout == "connected 127.0.0.1\n":
+                break
+            time.sleep(0.05)
+        process.kill()
+        process.wait(timeout=5)
+        released_before_stop = False
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if any(method == "DELETE" for method, _path in gateway_requests):
+                released_before_stop = True
+                break
+            time.sleep(0.05)
+        if not released_before_stop:
+            run_cli(env, "stop")
+
+    assert len(connections) == 1
+    assert released_before_stop

@@ -8,7 +8,7 @@ Provide coding agents with a lean, installable way to control a Ghost Gateway br
 
 1. **CLI** — `ghost-browser` executes Python from standard input with raw CDP and a small editable helper environment; `status`, `stop`, and `skill` manage the session and agent integration.
 2. **Gateway connector** — resolves `GET /json/version` using `APIFY_TOKEN`, tolerates cold starts, validates the returned WebSocket URL, and never prints or logs credentials.
-3. **Session lifecycle** — one owner-only local daemon keeps the remote browser alive across CLI calls, explicit `stop` releases it, and an idle deadline prevents abandoned billed sessions.
+3. **Session lifecycle** — one owner-only local daemon keeps the remote browser alive across CLI calls, explicit `stop` releases it, and an idle deadline prevents abandoned billed sessions. Cleanup is confirmed by a normal WebSocket close or successful idempotent DELETE; an unconfirmed release remains retryable.
 
 ## Requirements
 
@@ -21,6 +21,7 @@ Provide coding agents with a lean, installable way to control a Ghost Gateway br
   screenshots, and raw CDP event draining.
 - Load user-editable helpers from the agent workspace.
 - Isolate concurrent sessions by workspace and optional name.
+- Retain an owner-only opaque run handle, but not the caller token, until remote release is confirmed.
 - Treat webpage content as untrusted and require confirmation for consequential actions in the agent instructions.
 - Work on POSIX systems in v0.1; fail clearly elsewhere.
 - Test public behavior with local fake Gateway and CDP servers; live paid tests remain opt-in.

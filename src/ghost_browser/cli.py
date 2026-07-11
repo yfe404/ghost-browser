@@ -19,6 +19,7 @@ from .ipc import (
 )
 from .paths import session_paths
 from .redaction import redact
+from .release_state import retry_pending_release
 from .workspace import ensure_agent_helpers, load_agent_helpers
 
 
@@ -51,6 +52,9 @@ def _stop(paths) -> int:
     elif daemon_locked(paths):
         request_startup_stop(paths)
     else:
+        if retry_pending_release(paths):
+            print("released browser")
+            return 0
         previous = read_shutdown_result(paths)
         if previous and not previous.get("released"):
             raise RuntimeError(
@@ -97,8 +101,9 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"connected {state['gateway']}")
             elif daemon_locked(paths):
                 print("starting")
-            elif (result := read_shutdown_result(paths)) and not result.get(
-                "released"
+            elif paths.pending_release.exists() or (
+                (result := read_shutdown_result(paths))
+                and not result.get("released")
             ):
                 print("release-failed")
             else:

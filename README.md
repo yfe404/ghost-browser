@@ -87,7 +87,7 @@ that identity is no longer available.
 
 ```text
 ghost-browser                  execute Python from stdin
-ghost-browser status           show only stopped or the safe Gateway hostname
+ghost-browser status           show connected, starting, stopped, or release-failed
 ghost-browser stop             release the remote browser immediately
 ghost-browser workspace        print the editable helper directory
 ghost-browser skill            print the optional agent skill
@@ -116,10 +116,13 @@ end of every task.
 - The daemon socket and state directories are owner-only.
 - Caller tokens, returned WebSocket URLs, browser identifiers, and URL queries are excluded from logs and
   user-facing errors.
+- The caller token is never persisted. An owner-only opaque run handle is retained only until release is
+  confirmed, allowing `ghost-browser stop` to retry a transient cleanup failure.
 - Python supplied on stdin and project-scoped helpers are trusted code running with the coding agent's existing
   environment authority; Ghost Browser does not sandbox them.
 - A command that times out after sending is never replayed; its outcome is reported as unknown.
-- WebSocket close releases the browser, followed by an idempotent HTTP DELETE backstop.
+- A confirmed normal WebSocket close releases the browser, followed by an idempotent HTTP DELETE backstop.
+  Failed cleanup is reported as `release-failed` and remains retryable with `ghost-browser stop`.
 - Page content is untrusted. Consequential purchases, submissions, messages, uploads, account changes, and
   destructive actions require explicit user authorization.
 

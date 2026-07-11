@@ -7,6 +7,7 @@ import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from typing import NoReturn
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
 
 
@@ -20,6 +21,7 @@ class Allocation:
     gateway_url: str = field(repr=False)
     websocket_url: str = field(repr=False)
     browser_id: str | None = field(repr=False)
+    caller_token: str = field(default="", repr=False)
 
     @property
     def gateway_host(self) -> str:
@@ -28,6 +30,14 @@ class Allocation:
 
 class GatewayError(RuntimeError):
     """A sanitized Gateway failure safe to display to the user."""
+
+
+class AllocationCleanupError(GatewayError):
+    """A successful allocation response whose release wasn't confirmed."""
+
+    def __init__(self, message: str, allocation: Allocation | None) -> None:
+        super().__init__(message)
+        self.allocation = allocation
 
 
 def gateway_url_from_env() -> str:
@@ -68,7 +78,7 @@ def _browser_id_from_websocket(websocket_url: str) -> str | None:
     parts = [part for part in urlsplit(websocket_url).path.split("/") if part]
     if len(parts) >= 3 and parts[-3:-1] == ["devtools", "browser"]:
         return unquote(parts[-1]) or None
-    return None
+    return unquote(parts[-1]) or None if parts else None
 
 
 def _allocation_url(gateway_url: str, token: str) -> str:
@@ -80,6 +90,40 @@ def _allocation_url(gateway_url: str, token: str) -> str:
     return urlunsplit(
         (parsed.scheme, parsed.netloc, path, urlencode(query), "")
     )
+
+
+def _cleanup_websocket_url(
+    gateway_url: str, browser_id: str, caller_token: str
+) -> str:
+    gateway = urlsplit(gateway_url)
+    scheme = "wss" if gateway.scheme == "https" else "ws"
+    query = parse_qsl(gateway.query, keep_blank_values=True)
+    if not any(key == "token" for key, _value in query) and caller_token:
+        query.append(("token", caller_token))
+    path = f"/devtools/browser/{quote(browser_id, safe='')}"
+    return urlunsplit((scheme, gateway.netloc, path, urlencode(query), ""))
+
+
+def _fail_successful_allocation(
+    message: str,
+    gateway_url: str,
+    browser_id: str | None,
+    caller_token: str,
+    timeout: float,
+) -> NoReturn:
+    if not browser_id:
+        raise AllocationCleanupError(message, None)
+    cleanup = Allocation(
+        gateway_url,
+        _cleanup_websocket_url(gateway_url, browser_id, caller_token),
+        browser_id,
+        caller_token,
+    )
+    try:
+        release_browser(cleanup, timeout=min(timeout, 15))
+    except GatewayError:
+        raise AllocationCleanupError(message, cleanup) from None
+    raise GatewayError(message)
 
 
 def allocate_browser(
@@ -95,48 +139,84 @@ def allocate_browser(
     query_has_token = any(
         key == "token" for key, _value in parse_qsl(urlsplit(gateway_url).query)
     )
-    if not caller_token and not query_has_token and not _loopback(urlsplit(gateway_url).hostname):
+    if (
+        not caller_token
+        and not query_has_token
+        and not _loopback(urlsplit(gateway_url).hostname)
+    ):
         raise GatewayError("APIFY_TOKEN is required for the configured gateway")
     request = urllib.request.Request(_allocation_url(gateway_url, caller_token))
+    browser_id: str | None = None
+    successful_response = False
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
+            successful_response = True
+            browser_id = response.headers.get("X-Ghost-Session")
             raw = response.read(1_048_577)
             if len(raw) > 1_048_576:
                 raise GatewayError("gateway allocation response is too large")
             payload = json.loads(raw)
+            candidate = payload["webSocketDebuggerUrl"]
+            if not browser_id and isinstance(candidate, str):
+                browser_id = _browser_id_from_websocket(candidate)
             websocket_url = _validate_websocket_url(
-                payload["webSocketDebuggerUrl"], gateway_url
+                candidate, gateway_url
             )
-            browser_id = response.headers.get(
-                "X-Ghost-Session"
-            ) or _browser_id_from_websocket(websocket_url)
-    except GatewayError:
-        raise
+    except GatewayError as error:
+        _fail_successful_allocation(
+            str(error), gateway_url, browser_id, caller_token, timeout
+        )
     except urllib.error.HTTPError as error:
         raise GatewayError(f"gateway allocation failed: HTTP {error.code}") from None
     except (OSError, TimeoutError) as error:
-        raise GatewayError(
-            f"gateway allocation failed: {type(error).__name__}"
-        ) from None
+        message = f"gateway allocation failed: {type(error).__name__}"
+        if successful_response:
+            _fail_successful_allocation(
+                message, gateway_url, browser_id, caller_token, timeout
+            )
+        raise GatewayError(message) from None
     except (KeyError, TypeError, ValueError):
-        raise GatewayError("gateway allocation returned an invalid response") from None
-    return Allocation(gateway_url, websocket_url, browser_id)
+        _fail_successful_allocation(
+            "gateway allocation returned an invalid response",
+            gateway_url,
+            browser_id,
+            caller_token,
+            timeout,
+        )
+    return Allocation(gateway_url, websocket_url, browser_id, caller_token)
 
 
 def release_browser(allocation: Allocation, *, timeout: float = 15) -> None:
     """Best-effort idempotent release on the replica that owns the browser."""
 
     if not allocation.browser_id:
-        return
+        raise GatewayError("gateway release failed: missing browser identifier")
     websocket = urlsplit(allocation.websocket_url)
+    gateway = urlsplit(allocation.gateway_url)
     scheme = "https" if websocket.scheme == "wss" else "http"
     path = f"/v1/sessions/{quote(allocation.browser_id, safe='')}"
-    primary = urlunsplit((scheme, websocket.netloc, path, websocket.query, ""))
+    primary_query = parse_qsl(websocket.query, keep_blank_values=True)
+    if not any(key == "token" for key, _value in primary_query):
+        gateway_token = next(
+            (
+                value
+                for key, value in parse_qsl(
+                    gateway.query, keep_blank_values=True
+                )
+                if key == "token"
+            ),
+            "",
+        )
+        token = allocation.caller_token or gateway_token
+        if token:
+            primary_query.append(("token", token))
+    primary = urlunsplit(
+        (scheme, websocket.netloc, path, urlencode(primary_query), "")
+    )
 
-    gateway = urlsplit(allocation.gateway_url)
     fallback_query = parse_qsl(gateway.query, keep_blank_values=True)
     if not any(key == "token" for key, _value in fallback_query):
-        token = os.environ.get("APIFY_TOKEN", "")
+        token = allocation.caller_token or os.environ.get("APIFY_TOKEN", "")
         if token:
             fallback_query.append(("token", token))
     fallback_path = f"{gateway.path.rstrip('/')}{path}"

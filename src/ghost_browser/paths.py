@@ -19,6 +19,7 @@ class SessionPaths:
     startup_error: Path
     stop_requested: Path
     shutdown_result: Path
+    pending_release: Path
     workspace: Path
 
 
@@ -99,5 +100,6 @@ def session_paths(
         startup_error=Path(f"{prefix}.error"),
         stop_requested=Path(f"{prefix}.stop"),
         shutdown_result=Path(f"{prefix}.result"),
+        pending_release=Path(f"{prefix}.release"),
         workspace=workspace,
     )

@@ -45,6 +45,8 @@ ghost-browser stop
 
 Successful output contains a Chromium product string. Do not inspect daemon files or print Gateway/CDP URLs.
 Setup is complete after `ghost-browser status` reports `stopped`.
+If it reports `release-failed`, run `ghost-browser stop` again; the owner-only release handle is retained for
+a safe idempotent retry. Never inspect or print that handle.
 
 For normal tasks, keep one browser alive across invocations and run `ghost-browser stop` exactly once at the
 end. Do not probe `/json/version`, `/json`, or `/json/list` yourself because each request can allocate and bill

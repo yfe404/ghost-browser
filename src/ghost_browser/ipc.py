@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Any
 
 from .paths import SessionPaths
+from .release_state import retry_pending_release
+from .settings import startup_wait_timeout, stop_wait_timeout
 
 
 MAX_MESSAGE_BYTES = 64 * 1024 * 1024
@@ -105,9 +107,7 @@ def read_shutdown_result(paths: SessionPaths) -> dict[str, Any] | None:
 
 
 def _startup_deadline() -> float:
-    allocation = float(os.environ.get("GHOST_BROWSER_ALLOCATION_TIMEOUT", "180"))
-    websocket = float(os.environ.get("GHOST_BROWSER_WS_TIMEOUT", "30"))
-    return time.monotonic() + allocation + websocket + 10
+    return time.monotonic() + startup_wait_timeout()
 
 
 def _wait_for_existing(paths: SessionPaths, deadline: float) -> dict[str, Any]:
@@ -134,6 +134,10 @@ def ensure_daemon(paths: SessionPaths) -> dict[str, Any]:
             return _wait_for_existing(paths, _startup_deadline())
         if running := ping(paths):
             return running
+        try:
+            retry_pending_release(paths)
+        except Exception as error:
+            raise IPCError(str(error)) from None
         for stale in (
             paths.socket,
             paths.startup_error,
@@ -179,11 +183,7 @@ def wait_until_stopped(
     paths: SessionPaths, *, timeout: float | None = None
 ) -> None:
     if timeout is None:
-        allocation = float(
-            os.environ.get("GHOST_BROWSER_ALLOCATION_TIMEOUT", "180")
-        )
-        websocket = float(os.environ.get("GHOST_BROWSER_WS_TIMEOUT", "30"))
-        timeout = allocation + websocket + 15
+        timeout = stop_wait_timeout()
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if (

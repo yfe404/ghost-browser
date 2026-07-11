@@ -12,6 +12,7 @@ def fake_gateway(
     ws_url="ws://127.0.0.1:9222/devtools/browser/opaque?token=ws-secret",
     status=200,
     browser_id="browser-42",
+    raw_body=None,
 ):
     requests = []
 
@@ -25,7 +26,11 @@ def fake_gateway(
                 self.end_headers()
                 self.wfile.write(payload)
                 return
-            payload = json.dumps({"webSocketDebuggerUrl": ws_url}).encode()
+            payload = (
+                raw_body
+                if raw_body is not None
+                else json.dumps({"webSocketDebuggerUrl": ws_url}).encode()
+            )
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))
@@ -107,6 +112,27 @@ def test_release_uses_opaque_websocket_authority_and_credentials(monkeypatch):
     ]
 
 
+def test_release_restores_caller_token_when_saved_handle_omits_it(monkeypatch):
+    from ghost_browser.gateway import Allocation, release_browser
+
+    monkeypatch.setenv("APIFY_TOKEN", "caller-secret")
+    with fake_gateway() as (gateway_url, requests):
+        port = gateway_url.split(":")[2].split("/")[0]
+        allocation = Allocation(
+            gateway_url=gateway_url,
+            websocket_url=(
+                f"ws://127.0.0.1:{port}/devtools/browser/opaque"
+            ),
+            browser_id="browser-42",
+            caller_token="caller-secret",
+        )
+        release_browser(allocation, timeout=2)
+
+    assert requests == [
+        ("DELETE", "/v1/sessions/browser-42?token=caller-secret")
+    ]
+
+
 def test_existing_gateway_token_wins_without_duplication(monkeypatch):
     from ghost_browser.gateway import allocate_browser
 
@@ -163,3 +189,15 @@ def test_remote_gateway_cannot_redirect_to_plaintext_loopback(monkeypatch):
 
     with pytest.raises(GatewayError, match="insecure WebSocket"):
         allocate_browser("https://gateway.example", timeout=2)
+
+
+def test_malformed_success_response_releases_header_identified_browser(monkeypatch):
+    from ghost_browser.gateway import GatewayError, allocate_browser
+
+    monkeypatch.setenv("APIFY_TOKEN", "caller-secret")
+    with fake_gateway(raw_body=b"{not-json") as (gateway_url, requests):
+        with pytest.raises(GatewayError, match="invalid response"):
+            allocate_browser(gateway_url, timeout=2)
+
+    assert requests[0][0] == "GET"
+    assert any(method == "DELETE" for method, _path in requests)

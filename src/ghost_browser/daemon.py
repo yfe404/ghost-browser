@@ -8,14 +8,15 @@ import json
 import os
 import signal
 import time
-from collections import deque
 from contextlib import suppress
 from typing import Any
 
 from websockets.asyncio.client import connect
 
+from .cdp import CDPConnection
 from .gateway import (
     Allocation,
+    AllocationCleanupError,
     allocate_browser,
     gateway_url_from_env,
     release_browser,
@@ -23,117 +24,12 @@ from .gateway import (
 from .ipc import MAX_MESSAGE_BYTES
 from .paths import SessionPaths, session_paths
 from .redaction import redact
-
-
-class CDPError(RuntimeError):
-    """A Chrome DevTools Protocol or transport error."""
-
-
-class CDPConnection:
-    def __init__(self, websocket: Any) -> None:
-        self.websocket = websocket
-        self.next_id = 0
-        self.pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
-        self.events: deque[dict[str, Any]] = deque(maxlen=512)
-        self.send_lock = asyncio.Lock()
-        self.closed = asyncio.Event()
-        self.reader_task: asyncio.Task[None] | None = None
-
-    def start(self) -> None:
-        self.reader_task = asyncio.create_task(self._read(), name="ghost-cdp-reader")
-
-    async def _read(self) -> None:
-        failure = CDPError("CDP connection closed")
-        try:
-            async for raw in self.websocket:
-                try:
-                    message = json.loads(raw)
-                except (TypeError, ValueError):
-                    raise CDPError("CDP returned malformed JSON") from None
-                message_id = message.get("id")
-                if message_id in self.pending:
-                    future = self.pending.pop(message_id)
-                    if message.get("error"):
-                        error = message["error"]
-                        future.set_exception(
-                            CDPError(
-                                f"CDP {error.get('code', 'error')}: "
-                                f"{error.get('message', 'command failed')}"
-                            )
-                        )
-                    else:
-                        future.set_result(message.get("result") or {})
-                elif message.get("method"):
-                    self.events.append(message)
-        except asyncio.CancelledError:
-            failure = CDPError("CDP connection closed")
-            raise
-        except Exception as error:
-            failure = error if isinstance(error, CDPError) else CDPError(
-                f"CDP transport failed: {type(error).__name__}"
-            )
-        finally:
-            for future in self.pending.values():
-                if not future.done():
-                    future.set_exception(failure)
-            self.pending.clear()
-            self.closed.set()
-
-    async def send(
-        self,
-        method: str,
-        params: dict[str, Any] | None = None,
-        *,
-        session_id: str | None = None,
-        timeout: float = 30,
-    ) -> dict[str, Any]:
-        if self.closed.is_set():
-            raise CDPError("CDP connection is closed")
-        loop = asyncio.get_running_loop()
-        async with self.send_lock:
-            self.next_id += 1
-            message_id = self.next_id
-            future: asyncio.Future[dict[str, Any]] = loop.create_future()
-            self.pending[message_id] = future
-            message: dict[str, Any] = {
-                "id": message_id,
-                "method": method,
-                "params": params or {},
-            }
-            if session_id is not None:
-                message["sessionId"] = session_id
-            try:
-                await self.websocket.send(json.dumps(message, separators=(",", ":")))
-            except Exception as error:
-                self.pending.pop(message_id, None)
-                raise CDPError(
-                    f"CDP command was not sent: {type(error).__name__}"
-                ) from None
-        try:
-            return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
-        except TimeoutError:
-            self.pending.pop(message_id, None)
-            future.cancel()
-            raise CDPError(
-                "CDP command timed out after it was sent; outcome is unknown"
-            ) from None
-
-    def drain_events(self) -> list[dict[str, Any]]:
-        events = list(self.events)
-        self.events.clear()
-        return events
-
-    async def close(self) -> None:
-        close_error: Exception | None = None
-        try:
-            await self.websocket.close(code=1000, reason="Ghost Browser released")
-        except Exception as error:
-            close_error = error
-        if self.reader_task:
-            with suppress(asyncio.CancelledError, Exception):
-                await self.reader_task
-        if close_error:
-            raise close_error
+from .release_state import (
+    clear_release_handle,
+    save_release_handle,
+    write_shutdown_result,
+)
+from .settings import allocation_timeout, idle_timeout, websocket_timeout
 
 
 class BrowserDaemon:
@@ -144,12 +40,14 @@ class BrowserDaemon:
         cdp: CDPConnection,
         stop: asyncio.Event,
         ready: asyncio.Event,
+        claimed: asyncio.Event,
     ) -> None:
         self.paths = paths
         self.allocation = allocation
         self.cdp = cdp
         self.stop = stop
         self.ready = ready
+        self.claimed = claimed
         self.last_activity = time.monotonic()
         self.inflight = 0
         self.active_session: str | None = None
@@ -199,6 +97,7 @@ class BrowserDaemon:
                 "pid": os.getpid(),
             }
         if operation == "cdp":
+            self.claimed.set()
             self.inflight += 1
             try:
                 return await self.cdp.send(
@@ -211,9 +110,11 @@ class BrowserDaemon:
                 self.inflight -= 1
                 self.last_activity = time.monotonic()
         if operation == "drain_events":
+            self.claimed.set()
             self.last_activity = time.monotonic()
             return self.cdp.drain_events()
         if operation == "ensure_page":
+            self.claimed.set()
             self.inflight += 1
             try:
                 return await self.ensure_page()
@@ -257,9 +158,7 @@ class BrowserDaemon:
             await writer.wait_closed()
 
     async def idle_watch(self) -> None:
-        idle_seconds = max(
-            1.0, float(os.environ.get("GHOST_BROWSER_IDLE_SECONDS", "600"))
-        )
+        idle_seconds = idle_timeout()
         while not self.stop.is_set():
             if self.inflight:
                 try:
@@ -322,21 +221,21 @@ def _parent_alive(parent_pid: int) -> bool:
 async def _watch_startup(
     paths: SessionPaths,
     shutdown: asyncio.Event,
-    ready: asyncio.Event,
+    claimed: asyncio.Event,
 ) -> None:
     parent_pid = int(os.environ.get("GHOST_BROWSER_PARENT_PID", "0"))
     while not shutdown.is_set():
         if paths.stop_requested.exists():
             shutdown.set()
             return
-        if not ready.is_set() and not _parent_alive(parent_pid):
+        if not claimed.is_set() and not _parent_alive(parent_pid):
             shutdown.set()
             return
         await asyncio.sleep(0.05)
 
 
 async def _allocate_until_stopped(shutdown: asyncio.Event) -> Allocation:
-    timeout = float(os.environ.get("GHOST_BROWSER_ALLOCATION_TIMEOUT", "180"))
+    timeout = allocation_timeout()
     allocation_task = asyncio.create_task(
         asyncio.to_thread(allocate_browser, gateway_url_from_env(), timeout=timeout)
     )
@@ -358,7 +257,7 @@ async def _connect_until_stopped(
     connection = asyncio.ensure_future(
         connect(
             allocation.websocket_url,
-            open_timeout=float(os.environ.get("GHOST_BROWSER_WS_TIMEOUT", "30")),
+            open_timeout=websocket_timeout(),
             close_timeout=10,
             ping_interval=30,
             ping_timeout=30,
@@ -387,9 +286,11 @@ async def run() -> None:
     cdp: CDPConnection | None = None
     shutdown = asyncio.Event()
     ready = asyncio.Event()
+    claimed = asyncio.Event()
     websocket_released = False
     delete_released = False
     cleanup_error: Exception | None = None
+    release_uncertain = False
     paths.pid.write_text(str(os.getpid()), encoding="ascii")
     paths.pid.chmod(0o600)
     loop = asyncio.get_running_loop()
@@ -397,18 +298,26 @@ async def run() -> None:
         with suppress(NotImplementedError):
             loop.add_signal_handler(signum, shutdown.set)
     watcher = asyncio.create_task(
-        _watch_startup(paths, shutdown, ready), name="ghost-startup-watch"
+        _watch_startup(paths, shutdown, claimed), name="ghost-startup-watch"
     )
     try:
         allocation = await _allocate_until_stopped(shutdown)
+        save_release_handle(paths, allocation)
         if shutdown.is_set():
             raise StartupCancelled("browser startup cancelled after allocation")
         websocket = await _connect_until_stopped(allocation, shutdown)
         cdp = CDPConnection(websocket)
         cdp.start()
-        daemon = BrowserDaemon(paths, allocation, cdp, shutdown, ready)
+        daemon = BrowserDaemon(paths, allocation, cdp, shutdown, ready, claimed)
         await daemon.serve()
     except Exception as error:
+        if isinstance(error, AllocationCleanupError):
+            release_uncertain = True
+            cleanup_error = error
+            allocation = error.allocation
+            if allocation:
+                with suppress(Exception):
+                    save_release_handle(paths, allocation)
         if not ready.is_set():
             paths.startup_error.write_text(
                 redact(
@@ -427,8 +336,7 @@ async def run() -> None:
             await watcher
         if cdp:
             try:
-                await cdp.close()
-                websocket_released = True
+                websocket_released = await cdp.close()
             except Exception as error:
                 cleanup_error = error
         if allocation:
@@ -437,7 +345,11 @@ async def run() -> None:
                 delete_released = True
             except Exception as error:
                 cleanup_error = cleanup_error or error
-        released = allocation is None or websocket_released or delete_released
+        released = (
+            allocation is None and not release_uncertain
+        ) or websocket_released or delete_released
+        if released:
+            clear_release_handle(paths)
         result = {"released": released}
         if not released:
             result["error"] = redact(
@@ -447,10 +359,7 @@ async def run() -> None:
                 allocation.browser_id if allocation else None,
             )
         try:
-            paths.shutdown_result.write_text(
-                json.dumps(result, separators=(",", ":")), encoding="utf-8"
-            )
-            paths.shutdown_result.chmod(0o600)
+            write_shutdown_result(paths, result)
         finally:
             for path in (paths.socket, paths.pid, paths.stop_requested):
                 with suppress(FileNotFoundError):
