@@ -399,7 +399,7 @@ async def run() -> None:
                 allocation.browser_id if allocation else None,
             )
         write_shutdown_result(paths, result)
-        if not released and allocation:
+        if not released and allocation and allocation.exact_owner:
             await _retry_release(
                 paths,
                 allocation,

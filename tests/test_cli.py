@@ -1,12 +1,15 @@
 import json
 import os
+import select
 import signal
+import socket
 import subprocess
 import sys
 import threading
 import time
 from contextlib import ExitStack, contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlsplit
 
 from websockets.sync.server import serve
 
@@ -79,13 +82,24 @@ def fake_gateway(
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
+            if self.headers.get("Upgrade", "").lower() == "websocket":
+                self._proxy_websocket()
+                return
             requests.append((self.command, self.path))
             if self.path.startswith("/json/version") and allocation_delay:
                 time.sleep(allocation_delay)
-            resolved_websocket = websocket_url or (
-                f"ws://127.0.0.1:{self.server.server_port}"
-                "/devtools/browser/opaque?token=opaque-run-secret"
-            )
+            if websocket_url:
+                upstream = urlsplit(websocket_url)
+                resolved_websocket = (
+                    f"ws://127.0.0.1:{self.server.server_port}"
+                    f"{upstream.path}"
+                    f"?{upstream.query}"
+                )
+            else:
+                resolved_websocket = (
+                    f"ws://127.0.0.1:{self.server.server_port}"
+                    "/devtools/browser/opaque?token=opaque-run-secret"
+                )
             body = (
                 raw_body
                 if raw_body is not None
@@ -99,6 +113,48 @@ def fake_gateway(
             self.send_header("X-Ghost-Session", "browser-42")
             self.end_headers()
             self.wfile.write(body)
+
+        def _proxy_websocket(self):
+            if not websocket_url:
+                self.send_error(502)
+                return
+            target = urlsplit(websocket_url)
+            upstream = socket.create_connection(
+                (target.hostname, target.port), timeout=2
+            )
+            try:
+                path = target.path or "/"
+                if target.query:
+                    path += f"?{target.query}"
+                headers = [f"GET {path} HTTP/1.1", f"Host: {target.netloc}"]
+                headers.extend(
+                    f"{key}: {value}"
+                    for key, value in self.headers.items()
+                    if key.lower() != "host"
+                )
+                upstream.sendall(("\r\n".join(headers) + "\r\n\r\n").encode())
+                response = bytearray()
+                while b"\r\n\r\n" not in response:
+                    chunk = upstream.recv(4096)
+                    if not chunk:
+                        return
+                    response.extend(chunk)
+                self.connection.sendall(response)
+                peers = {
+                    self.connection: upstream,
+                    upstream: self.connection,
+                }
+                while True:
+                    readable, _writable, _errors = select.select(peers, [], [], 5)
+                    if not readable:
+                        continue
+                    for source in readable:
+                        data = source.recv(65_536)
+                        if not data:
+                            return
+                        peers[source].sendall(data)
+            finally:
+                upstream.close()
 
         def do_DELETE(self):
             requests.append((self.command, self.path))

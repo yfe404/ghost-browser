@@ -155,11 +155,11 @@ def test_release_prefers_explicit_gateway_token_for_saved_handle(monkeypatch):
     ]
 
 
-def test_shared_fallback_404_is_not_release_confirmation(monkeypatch):
+def test_shared_gateway_is_not_used_as_release_fallback(monkeypatch):
     from ghost_browser.gateway import Allocation, GatewayError, release_browser
 
     monkeypatch.setenv("APIFY_TOKEN", "caller-secret")
-    with fake_gateway(delete_status=404) as (gateway_url, requests):
+    with fake_gateway(delete_status=204) as (gateway_url, requests):
         allocation = Allocation(
             gateway_url=gateway_url,
             websocket_url=(
@@ -168,10 +168,33 @@ def test_shared_fallback_404_is_not_release_confirmation(monkeypatch):
             browser_id="browser-42",
             caller_token="caller-secret",
         )
-        with pytest.raises(GatewayError, match="HTTP 404"):
+        with pytest.raises(GatewayError, match="URLError"):
             release_browser(allocation, timeout=0.2)
 
-    assert requests == [("DELETE", "/tenant/v1/sessions/browser-42?region=eu&token=caller-secret")]
+    assert requests == []
+
+
+def test_non_owner_delete_success_is_not_release_confirmation(monkeypatch):
+    from ghost_browser.gateway import Allocation, GatewayError, release_browser
+
+    monkeypatch.setenv("APIFY_TOKEN", "caller-secret")
+    with fake_gateway(delete_status=204) as (gateway_url, requests):
+        port = gateway_url.split(":")[2].split("/")[0]
+        allocation = Allocation(
+            gateway_url=gateway_url,
+            websocket_url=(
+                f"ws://127.0.0.1:{port}/devtools/browser/browser-42"
+            ),
+            browser_id="browser-42",
+            caller_token="caller-secret",
+            exact_owner=False,
+        )
+        with pytest.raises(GatewayError, match="could not be confirmed"):
+            release_browser(allocation, timeout=2)
+
+    assert requests == [
+        ("DELETE", "/v1/sessions/browser-42?token=caller-secret")
+    ]
 
 
 def test_existing_gateway_token_wins_without_duplication(monkeypatch):
@@ -270,3 +293,45 @@ def test_gateway_errors_never_retain_secret_allocation_objects(monkeypatch):
     assert not any(
         isinstance(value, Allocation) for value in vars(raised.value).values()
     )
+
+
+def test_remote_malformed_cleanup_is_not_marked_exact_owner(monkeypatch):
+    from ghost_browser.gateway import GatewayError, allocate_browser
+
+    class AllocationResponse:
+        headers = {"X-Ghost-Session": "browser-42"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def read(self, _limit):
+            return b"{not-json"
+
+    class DeleteResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+    def urlopen(request, **_kwargs):
+        if request.get_method() == "DELETE":
+            return DeleteResponse()
+        return AllocationResponse()
+
+    captured = []
+    monkeypatch.setenv("APIFY_TOKEN", "caller-secret")
+    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+
+    with pytest.raises(GatewayError, match="invalid response"):
+        allocate_browser(
+            "https://gateway.example",
+            timeout=2,
+            _on_unreleased=captured.append,
+        )
+
+    assert len(captured) == 1
+    assert captured[0].exact_owner is False

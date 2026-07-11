@@ -12,9 +12,10 @@ Keep Ghost Browser a thin harness around a large action space.
 - Harness-owned code keeps credentials, token-bearing URLs, browser identifiers, and URL query values out of
   process arguments, filenames, logs, exceptions, `repr`, stdout, and stderr. Agent-authored Python is trusted
   code with the parent coding agent's environment authority.
-- Every exit path closes the WebSocket and attempts idempotent HTTP release. A release isn't reported as
-  successful without protocol evidence, and an unconfirmed release remains retryable only by the process
-  holding its capability in memory. Ambiguous commands are not replayed.
+- Every exit path with a Gateway-provided release capability closes the WebSocket and attempts idempotent
+  HTTP release. A response missing both the session header and exact Ghost WebSocket path is rejected and
+  reported as unconfirmed. Only exact-owner evidence can confirm release; an unconfirmed exact-owner release
+  remains retryable by the process holding its capability in memory. Ambiguous commands are not replayed.
 - Browser interactions that need behavioral fidelity use real CDP mouse and key events.
 - Tests assert behavior through the CLI, Gateway connector, or lifecycle boundary. Add one failing test, then
   the smallest implementation that makes it pass.

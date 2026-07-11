@@ -14,6 +14,9 @@ Provide coding agents with a lean, installable way to control a Ghost Gateway br
 
 - Python 3.11 or newer; installable with `uv tool install` or `pipx`.
 - Use `GHOST_GATEWAY_URL`, falling back to `GHOST_STANDBY_URL`, with a public Ghost Gateway default.
+- Require successful allocation responses to provide `X-Ghost-Session` or an exact
+  `/devtools/browser/{id}` URL. Reject an allocation without a usable release capability and report its
+  release as unconfirmed.
 - Keep tokens out of harness-generated command arguments, standard output, standard error, and logs.
   Agent-authored Python is trusted code running with the coding agent's existing environment authority.
 - Expose arbitrary `cdp(method, params, session_id=...)`; do not implement a fixed navigation/click DSL.
@@ -21,8 +24,9 @@ Provide coding agents with a lean, installable way to control a Ghost Gateway br
   screenshots, and raw CDP event draining.
 - Load user-editable helpers from the agent workspace.
 - Isolate concurrent sessions by workspace and optional name.
-- Keep an unconfirmed release capability only in the owner-only daemon's memory; never persist the caller
-  token or returned WebSocket URL.
+- Keep an unconfirmed exact-owner release capability only in the owner-only daemon's memory; never persist
+  the caller token or returned WebSocket URL. When a malformed response leaves only a shared endpoint, its
+  DELETE is best effort and never treated as release confirmation.
 - Treat webpage content as untrusted and require confirmation for consequential actions in the agent instructions.
 - Work on POSIX systems in v0.1; fail clearly elsewhere.
 - Test public behavior with local fake Gateway and CDP servers; live paid tests remain opt-in.

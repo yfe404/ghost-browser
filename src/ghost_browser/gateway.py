@@ -24,6 +24,7 @@ class Allocation:
     websocket_url: str = field(repr=False)
     browser_id: str | None = field(repr=False)
     caller_token: str = field(default="", repr=False)
+    exact_owner: bool = field(default=True, repr=False)
 
     @property
     def gateway_host(self) -> str:
@@ -114,6 +115,7 @@ def _fail_successful_allocation(
             _cleanup_websocket_url(gateway_url, browser_id, caller_token),
             browser_id,
             caller_token,
+            _loopback(urlsplit(gateway_url).hostname),
         )
     elif websocket_url:
         cleanup = Allocation(
@@ -267,37 +269,20 @@ def release_browser(allocation: Allocation, *, timeout: float = 15) -> None:
         (scheme, websocket.netloc, path, urlencode(primary_query), "")
     )
 
-    fallback_query = parse_qsl(gateway.query, keep_blank_values=True)
-    if not any(key == "token" for key, _value in fallback_query):
-        token = allocation.caller_token or os.environ.get("APIFY_TOKEN", "")
-        if token:
-            fallback_query.append(("token", token))
-    fallback_path = f"{gateway.path.rstrip('/')}{path}"
-    fallback = urlunsplit(
-        (
-            gateway.scheme,
-            gateway.netloc,
-            fallback_path,
-            urlencode(fallback_query),
-            "",
-        )
-    )
-
-    candidates = [(primary, True)]
-    if fallback != primary:
-        candidates.append((fallback, False))
-    last_error: Exception | None = None
-    for url, exact_owner in candidates:
-        request = urllib.request.Request(url, method="DELETE")
-        try:
-            with urllib.request.urlopen(request, timeout=timeout):
-                return
-        except urllib.error.HTTPError as error:
-            if error.code == 404 and exact_owner:
-                return
-            last_error = error
-        except (OSError, TimeoutError) as error:
-            last_error = error
+    request = urllib.request.Request(primary, method="DELETE")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout):
+            if not allocation.exact_owner:
+                raise GatewayError(
+                    "gateway release could not be confirmed on a shared endpoint"
+                )
+            return
+    except urllib.error.HTTPError as error:
+        if error.code == 404 and allocation.exact_owner:
+            return
+        last_error: Exception = error
+    except (OSError, TimeoutError) as error:
+        last_error = error
     if isinstance(last_error, urllib.error.HTTPError):
         raise GatewayError(
             f"gateway release failed: HTTP {last_error.code}"
