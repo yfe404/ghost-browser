@@ -35,10 +35,22 @@ From a checkout while developing:
 uv tool install --python 3.12 --editable .
 ```
 
+or:
+
+```sh
+pipx install --python python3.12 --editable .
+```
+
 After this repository is published:
 
 ```sh
 uv tool install --python 3.12 --upgrade git+https://github.com/yfe404/ghost-browser.git
+```
+
+or:
+
+```sh
+pipx install --python python3.12 git+https://github.com/yfe404/ghost-browser.git
 ```
 
 Set `APIFY_TOKEN` in the environment. Ghost Browser never writes it to a project file or passes it as a
@@ -116,8 +128,8 @@ end of every task.
 - The daemon socket and state directories are owner-only.
 - Caller tokens, returned WebSocket URLs, browser identifiers, and URL queries are excluded from logs and
   user-facing errors.
-- The caller token is never persisted. An owner-only opaque run handle is retained only until release is
-  confirmed, allowing `ghost-browser stop` to retry a transient cleanup failure.
+- Caller tokens and returned WebSocket URLs are never persisted. If cleanup cannot be confirmed, the
+  owner-only daemon keeps the release capability in memory and retries without exposing it to agent code.
 - Python supplied on stdin and project-scoped helpers are trusted code running with the coding agent's existing
   environment authority; Ghost Browser does not sandbox them.
 - A command that times out after sending is never replayed; its outcome is reported as unknown.

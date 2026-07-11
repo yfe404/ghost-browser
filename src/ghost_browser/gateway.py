@@ -7,8 +7,10 @@ import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from typing import NoReturn
+from typing import Callable, NoReturn
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
+
+from websockets.sync.client import connect as websocket_connect
 
 
 DEFAULT_GATEWAY = "https://straightforward-under--ghost-gateway.apify.actor"
@@ -30,14 +32,6 @@ class Allocation:
 
 class GatewayError(RuntimeError):
     """A sanitized Gateway failure safe to display to the user."""
-
-
-class AllocationCleanupError(GatewayError):
-    """A successful allocation response whose release wasn't confirmed."""
-
-    def __init__(self, message: str, allocation: Allocation | None) -> None:
-        super().__init__(message)
-        self.allocation = allocation
 
 
 def gateway_url_from_env() -> str:
@@ -78,7 +72,7 @@ def _browser_id_from_websocket(websocket_url: str) -> str | None:
     parts = [part for part in urlsplit(websocket_url).path.split("/") if part]
     if len(parts) >= 3 and parts[-3:-1] == ["devtools", "browser"]:
         return unquote(parts[-1]) or None
-    return unquote(parts[-1]) or None if parts else None
+    return None
 
 
 def _allocation_url(gateway_url: str, token: str) -> str:
@@ -110,19 +104,34 @@ def _fail_successful_allocation(
     browser_id: str | None,
     caller_token: str,
     timeout: float,
+    websocket_url: str | None,
+    on_unreleased: Callable[[Allocation | None], None] | None,
 ) -> NoReturn:
-    if not browser_id:
-        raise AllocationCleanupError(message, None)
-    cleanup = Allocation(
-        gateway_url,
-        _cleanup_websocket_url(gateway_url, browser_id, caller_token),
-        browser_id,
-        caller_token,
-    )
+    cleanup = None
+    if browser_id:
+        cleanup = Allocation(
+            gateway_url,
+            _cleanup_websocket_url(gateway_url, browser_id, caller_token),
+            browser_id,
+            caller_token,
+        )
+    elif websocket_url:
+        cleanup = Allocation(
+            gateway_url,
+            websocket_url,
+            None,
+            caller_token,
+        )
+    if cleanup is None:
+        if on_unreleased:
+            on_unreleased(None)
+        raise GatewayError(message)
     try:
         release_browser(cleanup, timeout=min(timeout, 15))
     except GatewayError:
-        raise AllocationCleanupError(message, cleanup) from None
+        if on_unreleased:
+            on_unreleased(cleanup)
+        raise GatewayError(message) from None
     raise GatewayError(message)
 
 
@@ -131,6 +140,7 @@ def allocate_browser(
     *,
     token: str | None = None,
     timeout: float = 180,
+    _on_unreleased: Callable[[Allocation | None], None] | None = None,
 ) -> Allocation:
     """Allocate exactly one browser through ``/json/version``."""
 
@@ -164,7 +174,13 @@ def allocate_browser(
             )
     except GatewayError as error:
         _fail_successful_allocation(
-            str(error), gateway_url, browser_id, caller_token, timeout
+            str(error),
+            gateway_url,
+            browser_id,
+            caller_token,
+            timeout,
+            None,
+            _on_unreleased,
         )
     except urllib.error.HTTPError as error:
         raise GatewayError(f"gateway allocation failed: HTTP {error.code}") from None
@@ -172,7 +188,13 @@ def allocate_browser(
         message = f"gateway allocation failed: {type(error).__name__}"
         if successful_response:
             _fail_successful_allocation(
-                message, gateway_url, browser_id, caller_token, timeout
+                message,
+                gateway_url,
+                browser_id,
+                caller_token,
+                timeout,
+                None,
+                _on_unreleased,
             )
         raise GatewayError(message) from None
     except (KeyError, TypeError, ValueError):
@@ -182,15 +204,46 @@ def allocate_browser(
             browser_id,
             caller_token,
             timeout,
+            None,
+            _on_unreleased,
+        )
+    if not browser_id:
+        _fail_successful_allocation(
+            "gateway allocation returned no browser identifier",
+            gateway_url,
+            None,
+            caller_token,
+            timeout,
+            websocket_url,
+            _on_unreleased,
         )
     return Allocation(gateway_url, websocket_url, browser_id, caller_token)
 
 
 def release_browser(allocation: Allocation, *, timeout: float = 15) -> None:
-    """Best-effort idempotent release on the replica that owns the browser."""
+    """Release through exact-owner DELETE, or normal WS close without an ID."""
 
     if not allocation.browser_id:
-        raise GatewayError("gateway release failed: missing browser identifier")
+        try:
+            with websocket_connect(
+                allocation.websocket_url,
+                open_timeout=timeout,
+                close_timeout=10,
+                ping_interval=None,
+                proxy=None,
+            ) as websocket:
+                websocket.close(code=1000, reason="Ghost Browser released")
+                if websocket.close_code != 1000:
+                    raise GatewayError(
+                        "gateway release failed: WebSocket close was abnormal"
+                    )
+        except GatewayError:
+            raise
+        except Exception as error:
+            raise GatewayError(
+                f"gateway release failed: {type(error).__name__}"
+            ) from None
+        return
     websocket = urlsplit(allocation.websocket_url)
     gateway = urlsplit(allocation.gateway_url)
     scheme = "https" if websocket.scheme == "wss" else "http"
@@ -230,14 +283,17 @@ def release_browser(allocation: Allocation, *, timeout: float = 15) -> None:
         )
     )
 
+    candidates = [(primary, True)]
+    if fallback != primary:
+        candidates.append((fallback, False))
     last_error: Exception | None = None
-    for url in dict.fromkeys((primary, fallback)):
+    for url, exact_owner in candidates:
         request = urllib.request.Request(url, method="DELETE")
         try:
             with urllib.request.urlopen(request, timeout=timeout):
                 return
         except urllib.error.HTTPError as error:
-            if error.code == 404:
+            if error.code == 404 and exact_owner:
                 return
             last_error = error
         except (OSError, TimeoutError) as error:

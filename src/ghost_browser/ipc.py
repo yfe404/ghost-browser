@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Any
 
 from .paths import SessionPaths
-from .release_state import retry_pending_release
 from .settings import startup_wait_timeout, stop_wait_timeout
 
 
@@ -106,6 +105,21 @@ def read_shutdown_result(paths: SessionPaths) -> dict[str, Any] | None:
     return result if isinstance(result, dict) else None
 
 
+def write_shutdown_result(paths: SessionPaths, result: dict[str, object]) -> None:
+    temporary = paths.shutdown_result.with_name(
+        f"{paths.shutdown_result.name}.{os.getpid()}.tmp"
+    )
+    try:
+        temporary.write_text(
+            json.dumps(result, separators=(",", ":")), encoding="utf-8"
+        )
+        temporary.chmod(0o600)
+        temporary.replace(paths.shutdown_result)
+    finally:
+        with suppress(FileNotFoundError):
+            temporary.unlink()
+
+
 def _startup_deadline() -> float:
     return time.monotonic() + startup_wait_timeout()
 
@@ -114,8 +128,16 @@ def _wait_for_existing(paths: SessionPaths, deadline: float) -> dict[str, Any]:
     while time.monotonic() < deadline:
         if running := ping(paths):
             return running
-        if not daemon_locked(paths):
-            detail = _read_startup_error(paths.startup_error)
+        detail = _read_startup_error(paths.startup_error)
+        result = read_shutdown_result(paths)
+        locked = daemon_locked(paths)
+        if detail and (result is not None or not locked):
+            raise IPCError(detail)
+        if result and not result.get("released"):
+            raise IPCError(
+                result.get("error") or "browser release outcome is unknown"
+            )
+        if not locked:
             raise IPCError(detail or "browser daemon stopped during startup")
         time.sleep(0.05)
     raise IPCError("browser daemon is running but did not become ready")
@@ -134,10 +156,11 @@ def ensure_daemon(paths: SessionPaths) -> dict[str, Any]:
             return _wait_for_existing(paths, _startup_deadline())
         if running := ping(paths):
             return running
-        try:
-            retry_pending_release(paths)
-        except Exception as error:
-            raise IPCError(str(error)) from None
+        if (result := read_shutdown_result(paths)) and not result.get("released"):
+            raise IPCError(
+                result.get("error")
+                or "previous browser release is still unconfirmed; run ghost-browser stop"
+            )
         for stale in (
             paths.socket,
             paths.startup_error,
@@ -165,8 +188,11 @@ def ensure_daemon(paths: SessionPaths) -> dict[str, Any]:
             while time.monotonic() < deadline:
                 if running := ping(paths):
                     return running
+                detail = _read_startup_error(paths.startup_error)
+                result = read_shutdown_result(paths)
+                if detail and (result is not None or process.poll() is not None):
+                    raise IPCError(detail)
                 if process.poll() is not None:
-                    detail = _read_startup_error(paths.startup_error)
                     raise IPCError(detail or "browser daemon failed to start")
                 time.sleep(0.05)
             request_startup_stop(paths)

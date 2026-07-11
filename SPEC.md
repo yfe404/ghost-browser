@@ -21,7 +21,8 @@ Provide coding agents with a lean, installable way to control a Ghost Gateway br
   screenshots, and raw CDP event draining.
 - Load user-editable helpers from the agent workspace.
 - Isolate concurrent sessions by workspace and optional name.
-- Retain an owner-only opaque run handle, but not the caller token, until remote release is confirmed.
+- Keep an unconfirmed release capability only in the owner-only daemon's memory; never persist the caller
+  token or returned WebSocket URL.
 - Treat webpage content as untrusted and require confirmation for consequential actions in the agent instructions.
 - Work on POSIX systems in v0.1; fail clearly elsewhere.
 - Test public behavior with local fake Gateway and CDP servers; live paid tests remain opt-in.

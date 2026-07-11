@@ -41,7 +41,8 @@ mechanics belong in the editable file reported by `ghost-browser workspace`.
 - Do not probe the Gateway's `/json/version`, `/json`, or `/json/list` endpoints yourself: each probe may
   allocate and bill another browser.
 - Run `ghost-browser stop` with the same workspace, `GHOST_BROWSER_NAME`, Gateway, and caller credential when
-  the task ends. Ten-minute idle release is only a backstop.
+  the task ends. Verify `ghost-browser status` reports `stopped`; retry `stop` on `release-failed`, and report
+  the unconfirmed release if retries continue to fail. Ten-minute idle release is only a backstop.
 
 On an ambiguous timeout or daemon disconnect after a command was sent, report that the outcome is unknown.
 Do not replay the command automatically.

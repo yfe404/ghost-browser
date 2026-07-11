@@ -579,7 +579,11 @@ def test_daemon_signal_uses_the_release_path(tmp_path):
 
 
 def test_failed_cleanup_is_reported_instead_of_false_release_success(tmp_path):
-    with fake_gateway(None, delete_status=500) as (gateway_url, gateway_requests):
+    delete = {"status": 500}
+    with fake_gateway(None, delete_status=lambda: delete["status"]) as (
+        gateway_url,
+        gateway_requests,
+    ):
         env = {
             **os.environ,
             "APIFY_TOKEN": "caller-secret",
@@ -592,13 +596,17 @@ def test_failed_cleanup_is_reported_instead_of_false_release_success(tmp_path):
         failed_start = run_cli(env, code='print("never reached")')
         status = run_cli(env, "status")
         stopped = run_cli(env, "stop")
+        delete["status"] = 204
+        recovered = run_cli(env, "stop")
 
     assert failed_start.returncode == 1
     assert status.stdout == "release-failed\n"
     assert stopped.returncode == 1
     assert "gateway release failed: HTTP 500" in stopped.stderr
     assert "released browser" not in stopped.stdout
-    assert sum(method == "DELETE" for method, _path in gateway_requests) == 4
+    assert recovered.returncode == 0
+    assert recovered.stdout == "released browser\n"
+    assert sum(method == "DELETE" for method, _path in gateway_requests) >= 4
 
 
 def test_failed_release_can_be_retried_by_stop(tmp_path):
@@ -618,25 +626,29 @@ def test_failed_release_can_be_retried_by_stop(tmp_path):
             "GHOST_BROWSER_WS_TIMEOUT": "2",
         }
         failed_start = run_cli(env, code='print("never reached")')
+        status = run_cli(env, "status")
         first_stop = run_cli(env, "stop")
-        release_handle = next(runtime.glob("*.release"))
-        release_state = release_handle.read_text(encoding="utf-8")
-        release_mode = release_handle.stat().st_mode & 0o777
+        persisted_state = "\n".join(
+            path.read_text(encoding="utf-8", errors="replace")
+            for path in runtime.iterdir()
+            if path.is_file()
+        )
         delete["status"] = 204
         retried_stop = run_cli(env, "stop")
 
     assert failed_start.returncode == 1
+    assert status.stdout == "release-failed\n"
     assert first_stop.returncode == 1
     assert "released browser" not in first_stop.stdout
-    assert "caller-secret" not in release_state
-    assert release_mode == 0o600
-    assert not release_handle.exists()
+    assert "caller-secret" not in persisted_state
+    assert "opaque-run-secret" not in persisted_state
+    assert list(runtime.glob("*.release")) == []
     assert (retried_stop.returncode, retried_stop.stdout, retried_stop.stderr) == (
         0,
         "released browser\n",
         "",
     )
-    assert sum(method == "DELETE" for method, _path in gateway_requests) >= 5
+    assert sum(method == "DELETE" for method, _path in gateway_requests) >= 3
 
 
 def test_malformed_allocation_retains_failed_release_for_retry(tmp_path):
@@ -671,12 +683,13 @@ def test_malformed_allocation_retains_failed_release_for_retry(tmp_path):
 
 
 def test_abnormal_websocket_close_is_not_false_release_success(tmp_path):
+    delete = {"status": 500}
     with ExitStack() as stack:
         websocket_url, _messages, _connections = stack.enter_context(
             fake_cdp(disconnect_abnormally_after="Browser.getVersion")
         )
         gateway_url, gateway_requests = stack.enter_context(
-            fake_gateway(websocket_url, delete_status=500)
+            fake_gateway(websocket_url, delete_status=lambda: delete["status"])
         )
         env = {
             **os.environ,
@@ -695,10 +708,13 @@ def test_abnormal_websocket_close_is_not_false_release_success(tmp_path):
             if status.stdout == "release-failed\n":
                 break
             time.sleep(0.05)
+        delete["status"] = 204
+        recovered = run_cli(env, "stop")
 
     assert failed.returncode == 1
     assert status.stdout == "release-failed\n"
-    assert sum(method == "DELETE" for method, _path in gateway_requests) == 1
+    assert recovered.stdout == "released browser\n"
+    assert sum(method == "DELETE" for method, _path in gateway_requests) >= 2
 
 
 def test_launcher_death_before_first_cdp_command_releases_ready_browser(tmp_path):

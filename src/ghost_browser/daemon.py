@@ -16,19 +16,13 @@ from websockets.asyncio.client import connect
 from .cdp import CDPConnection
 from .gateway import (
     Allocation,
-    AllocationCleanupError,
     allocate_browser,
     gateway_url_from_env,
     release_browser,
 )
-from .ipc import MAX_MESSAGE_BYTES
+from .ipc import MAX_MESSAGE_BYTES, write_shutdown_result
 from .paths import SessionPaths, session_paths
 from .redaction import redact
-from .release_state import (
-    clear_release_handle,
-    save_release_handle,
-    write_shutdown_result,
-)
 from .settings import allocation_timeout, idle_timeout, websocket_timeout
 
 
@@ -123,7 +117,7 @@ class BrowserDaemon:
                 self.last_activity = time.monotonic()
         if operation == "stop":
             asyncio.get_running_loop().call_soon(self.stop.set)
-            return {"released": True}
+            return {"stopping": True}
         raise RuntimeError("unknown browser daemon operation")
 
     async def handle(
@@ -234,10 +228,18 @@ async def _watch_startup(
         await asyncio.sleep(0.05)
 
 
-async def _allocate_until_stopped(shutdown: asyncio.Event) -> Allocation:
+async def _allocate_until_stopped(
+    shutdown: asyncio.Event,
+    on_unreleased,
+) -> Allocation:
     timeout = allocation_timeout()
     allocation_task = asyncio.create_task(
-        asyncio.to_thread(allocate_browser, gateway_url_from_env(), timeout=timeout)
+        asyncio.to_thread(
+            allocate_browser,
+            gateway_url_from_env(),
+            timeout=timeout,
+            _on_unreleased=on_unreleased,
+        )
     )
     stopped = asyncio.create_task(shutdown.wait())
     done, _pending = await asyncio.wait(
@@ -280,6 +282,49 @@ async def _connect_until_stopped(
     raise StartupCancelled("browser startup cancelled before connection")
 
 
+async def _retry_release(
+    paths: SessionPaths,
+    allocation: Allocation,
+    cleanup_error: Exception | str,
+) -> None:
+    """Keep the secret capability in memory until release is confirmed."""
+
+    delay = 1.0
+    error: Exception | str = cleanup_error
+    while True:
+        write_shutdown_result(
+            paths,
+            {
+                "released": False,
+                "error": redact(
+                    error,
+                    allocation.gateway_url,
+                    allocation.websocket_url,
+                    allocation.browser_id,
+                ),
+            },
+        )
+        deadline = time.monotonic() + delay
+        while time.monotonic() < deadline:
+            if paths.stop_requested.exists():
+                with suppress(FileNotFoundError):
+                    paths.stop_requested.unlink()
+                break
+            await asyncio.sleep(0.05)
+        try:
+            await _release_once(allocation)
+        except Exception as release_error:
+            error = release_error
+            delay = min(delay * 2, 30)
+            continue
+        write_shutdown_result(paths, {"released": True})
+        return
+
+
+async def _release_once(allocation: Allocation) -> None:
+    await asyncio.to_thread(release_browser, allocation)
+
+
 async def run() -> None:
     paths = session_paths()
     allocation: Allocation | None = None
@@ -291,6 +336,7 @@ async def run() -> None:
     delete_released = False
     cleanup_error: Exception | None = None
     release_uncertain = False
+    unreleased: list[Allocation | None] = []
     paths.pid.write_text(str(os.getpid()), encoding="ascii")
     paths.pid.chmod(0o600)
     loop = asyncio.get_running_loop()
@@ -301,8 +347,7 @@ async def run() -> None:
         _watch_startup(paths, shutdown, claimed), name="ghost-startup-watch"
     )
     try:
-        allocation = await _allocate_until_stopped(shutdown)
-        save_release_handle(paths, allocation)
+        allocation = await _allocate_until_stopped(shutdown, unreleased.append)
         if shutdown.is_set():
             raise StartupCancelled("browser startup cancelled after allocation")
         websocket = await _connect_until_stopped(allocation, shutdown)
@@ -311,13 +356,10 @@ async def run() -> None:
         daemon = BrowserDaemon(paths, allocation, cdp, shutdown, ready, claimed)
         await daemon.serve()
     except Exception as error:
-        if isinstance(error, AllocationCleanupError):
+        if unreleased:
             release_uncertain = True
             cleanup_error = error
-            allocation = error.allocation
-            if allocation:
-                with suppress(Exception):
-                    save_release_handle(paths, allocation)
+            allocation = unreleased[-1]
         if not ready.is_set():
             paths.startup_error.write_text(
                 redact(
@@ -341,15 +383,13 @@ async def run() -> None:
                 cleanup_error = error
         if allocation:
             try:
-                await asyncio.to_thread(release_browser, allocation)
+                await _release_once(allocation)
                 delete_released = True
             except Exception as error:
                 cleanup_error = cleanup_error or error
         released = (
             allocation is None and not release_uncertain
         ) or websocket_released or delete_released
-        if released:
-            clear_release_handle(paths)
         result = {"released": released}
         if not released:
             result["error"] = redact(
@@ -358,12 +398,16 @@ async def run() -> None:
                 allocation.websocket_url if allocation else None,
                 allocation.browser_id if allocation else None,
             )
-        try:
-            write_shutdown_result(paths, result)
-        finally:
-            for path in (paths.socket, paths.pid, paths.stop_requested):
-                with suppress(FileNotFoundError):
-                    path.unlink()
+        write_shutdown_result(paths, result)
+        if not released and allocation:
+            await _retry_release(
+                paths,
+                allocation,
+                cleanup_error or "browser release outcome is unknown",
+            )
+        for path in (paths.socket, paths.pid, paths.stop_requested):
+            with suppress(FileNotFoundError):
+                path.unlink()
 
 
 def _lifetime_lock(paths: SessionPaths):

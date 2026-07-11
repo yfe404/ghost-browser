@@ -13,8 +13,8 @@ Keep Ghost Browser a thin harness around a large action space.
   process arguments, filenames, logs, exceptions, `repr`, stdout, and stderr. Agent-authored Python is trusted
   code with the parent coding agent's environment authority.
 - Every exit path closes the WebSocket and attempts idempotent HTTP release. A release isn't reported as
-  successful without protocol evidence, and an unconfirmed release handle remains retryable. Ambiguous
-  commands are not replayed.
+  successful without protocol evidence, and an unconfirmed release remains retryable only by the process
+  holding its capability in memory. Ambiguous commands are not replayed.
 - Browser interactions that need behavioral fidelity use real CDP mouse and key events.
 - Tests assert behavior through the CLI, Gateway connector, or lifecycle boundary. Add one failing test, then
   the smallest implementation that makes it pass.

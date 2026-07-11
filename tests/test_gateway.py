@@ -13,6 +13,7 @@ def fake_gateway(
     status=200,
     browser_id="browser-42",
     raw_body=None,
+    delete_status=204,
 ):
     requests = []
 
@@ -41,7 +42,7 @@ def fake_gateway(
 
         def do_DELETE(self):
             requests.append((self.command, self.path))
-            self.send_response(204)
+            self.send_response(delete_status)
             self.end_headers()
 
         def log_message(self, _format, *_args):
@@ -154,6 +155,25 @@ def test_release_prefers_explicit_gateway_token_for_saved_handle(monkeypatch):
     ]
 
 
+def test_shared_fallback_404_is_not_release_confirmation(monkeypatch):
+    from ghost_browser.gateway import Allocation, GatewayError, release_browser
+
+    monkeypatch.setenv("APIFY_TOKEN", "caller-secret")
+    with fake_gateway(delete_status=404) as (gateway_url, requests):
+        allocation = Allocation(
+            gateway_url=gateway_url,
+            websocket_url=(
+                "ws://127.0.0.1:1/devtools/browser/opaque?token=run-secret"
+            ),
+            browser_id="browser-42",
+            caller_token="caller-secret",
+        )
+        with pytest.raises(GatewayError, match="HTTP 404"):
+            release_browser(allocation, timeout=0.2)
+
+    assert requests == [("DELETE", "/tenant/v1/sessions/browser-42?region=eu&token=caller-secret")]
+
+
 def test_existing_gateway_token_wins_without_duplication(monkeypatch):
     from ghost_browser.gateway import allocate_browser
 
@@ -182,6 +202,18 @@ def test_missing_session_header_falls_back_to_websocket_browser_id(monkeypatch):
         allocation = allocate_browser(gateway_url, timeout=2)
 
     assert allocation.browser_id == "opaque"
+
+
+def test_nonstandard_websocket_path_is_not_guessed_as_release_id(monkeypatch):
+    from ghost_browser.gateway import GatewayError, allocate_browser
+
+    monkeypatch.setenv("APIFY_TOKEN", "caller-secret")
+    with fake_gateway(
+        browser_id=None,
+        ws_url="ws://127.0.0.1:9222/custom/opaque?token=ws-secret",
+    ) as (gateway_url, _requests):
+        with pytest.raises(GatewayError, match="no browser identifier"):
+            allocate_browser(gateway_url, timeout=2)
 
 
 def test_remote_gateway_cannot_redirect_to_plaintext_loopback(monkeypatch):
@@ -222,3 +254,19 @@ def test_malformed_success_response_releases_header_identified_browser(monkeypat
 
     assert requests[0][0] == "GET"
     assert any(method == "DELETE" for method, _path in requests)
+
+
+def test_gateway_errors_never_retain_secret_allocation_objects(monkeypatch):
+    from ghost_browser.gateway import Allocation, GatewayError, allocate_browser
+
+    monkeypatch.setenv("APIFY_TOKEN", "caller-secret")
+    with fake_gateway(raw_body=b"{not-json", delete_status=500) as (
+        gateway_url,
+        _requests,
+    ):
+        with pytest.raises(GatewayError) as raised:
+            allocate_browser(gateway_url, timeout=2)
+
+    assert not any(
+        isinstance(value, Allocation) for value in vars(raised.value).values()
+    )
