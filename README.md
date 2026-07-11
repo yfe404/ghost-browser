@@ -26,7 +26,7 @@ handling, redaction, and release.
 Paste this into Codex, Claude Code, or another coding agent with shell access:
 
 ```text
-Clone Ghost Browser from the private repository https://github.com/apify/ghost-browser using my existing GitHub authentication, then follow agent.md. Use the APIFY_TOKEN already in my environment. Do not print the token, write it to disk, or put it in a command argument. Read the bundled Ghost Browser skill and register it if supported. Verify Browser.getVersion, then release the test browser and confirm that `ghost-browser status` reports `stopped`.
+Install Ghost Browser from the private `apify/ghost-browser` repository with my existing GitHub authentication, then use it through Ghost Gateway. First check whether `gh` is authenticated; clone with `gh repo clone apify/ghost-browser`, or use `git clone git@github.com:apify/ghost-browser.git` if SSH authentication is already configured. Install the checkout with `uv tool install --python 3.12 --editable ./ghost-browser`. Use the `APIFY_TOKEN` already in my environment; do not print it, write it to disk, or put it in a command argument. Then read and follow `agent.md`; read the bundled `ghost-browser skill` output and register it if the agent supports skills. Verify `Browser.getVersion`, then release the test browser and confirm that `ghost-browser status` reports `stopped`.
 ```
 
 <details>
@@ -34,6 +34,15 @@ Clone Ghost Browser from the private repository https://github.com/apify/ghost-b
 
 ```text
 After setup, open https://sentinel-bot-detector.vercel.app/. Interact through real CDP input, save the final screenshot as ghost-browser-demo.png, report the detector result and scores, then stop the browser and confirm that `ghost-browser status` reports `stopped`.
+```
+
+</details>
+
+<details>
+<summary><strong>Try the reCAPTCHA v3 interaction demo</strong></summary>
+
+```text
+After setup, open https://2captcha.com/demo/recaptcha-v3. Inspect the page, then click the visible “Check” control through real CDP pointer input. Wait for the page to show its result, save a final screenshot as ghost-browser-recaptcha-v3-demo.png, report the visible score or status, then stop the browser and confirm that `ghost-browser status` reports `stopped`. Do not use a CAPTCHA-solving service or submit any production form.
 ```
 
 </details>
@@ -53,10 +62,19 @@ set of page attachment, JavaScript, tab, screenshot, and event conveniences.
 
 ## Install for the private preview
 
-Clone with your existing GitHub authentication, then install the checkout:
+Use either authenticated GitHub CLI or an SSH key with access to the `apify` organization, then install the
+checkout:
 
 ```sh
+gh auth status
 gh repo clone apify/ghost-browser
+uv tool install --python 3.12 --editable ./ghost-browser
+```
+
+Without GitHub CLI:
+
+```sh
+git clone git@github.com:apify/ghost-browser.git
 uv tool install --python 3.12 --editable ./ghost-browser
 ```
 
@@ -154,7 +172,7 @@ The first invocation allocates a browser. Later invocations reuse its WebSocket 
 idle deadline. `GHOST_BROWSER_NAME` lets one working directory hold more than one independent browser.
 
 <p align="center">
-  <img src="docs/assets/session-lifecycle.svg" alt="Lifecycle chart showing allocation, repeated CDP calls on one browser, cleanup, confirmed stop, and retry after release failure." width="100%">
+  <img src="docs/assets/session-lifecycle.svg" alt="Lifecycle chart showing allocation, repeated CDP calls on one browser, cleanup, confirmed stop, and an exact-owner retry after release failure." width="100%">
 </p>
 
 Run `status` and `stop` with the same working directory, browser name, Gateway configuration, and caller

@@ -4,8 +4,9 @@ This is the canonical setup document for coding agents. Day-to-day behavior come
 
 ## 1. Check prerequisites
 
-Require Python 3.11 or newer and either `uv` or `pipx`. Confirm only whether `APIFY_TOKEN` exists; never
-print its value, persist it in `.env`, or place it in a command argument.
+Require Python 3.11 or newer, either `uv` or `pipx`, and either GitHub CLI (`gh`) or Git with an
+authenticated SSH key that can access the private `apify` organization. Confirm only whether `APIFY_TOKEN`
+exists; never print its value, persist it in `.env`, or place it in a command argument.
 
 ## 2. Install
 
@@ -24,6 +25,7 @@ pipx install --python python3.12 --editable .
 From the private Apify repository when no checkout exists:
 
 ```sh
+gh auth status
 gh repo clone apify/ghost-browser
 uv tool install --python 3.12 --editable ./ghost-browser
 ```
@@ -33,6 +35,13 @@ Or with pipx:
 ```sh
 gh repo clone apify/ghost-browser
 pipx install --python python3.12 --editable ./ghost-browser
+```
+
+Without GitHub CLI, clone with an authenticated SSH key:
+
+```sh
+git clone git@github.com:apify/ghost-browser.git
+uv tool install --python 3.12 --editable ./ghost-browser
 ```
 
 ## 3. Register the optional skill

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1440" height="690" viewBox="0 0 1440 690" role="img" aria-labelledby="title desc">
   <title id="title">One allocation, many CDP calls, one confirmed release</title>
-  <desc id="desc">A binary lifecycle chart shows no remote browser before allocation, one held browser reused across several CDP calls, then cleanup and confirmed release. An unconfirmed release becomes release-failed and retries cleanup.</desc>
+  <desc id="desc">A binary lifecycle chart shows no remote browser before allocation, one held browser reused across several CDP calls, then cleanup and confirmed release. An unconfirmed exact-owner release becomes release-failed and retries cleanup.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#081426"/>
@@ -72,7 +72,7 @@
     <text x="785" y="465" fill="#ffe1d9" font-size="18" font-weight="650">release-failed</text>
     <path d="M1113 387C1050 407 1019 444 980 455" fill="none" stroke="#ff8e70" stroke-width="3" stroke-dasharray="7 8" marker-end="url(#arrowCoral)"/>
     <path d="M851 425C871 372 923 347 1016 347" fill="none" stroke="#ff8e70" stroke-width="3" stroke-dasharray="7 8" marker-end="url(#arrowCoral)"/>
-    <text x="870" y="402" text-anchor="middle" fill="#ffb5a3" font-size="15">automatic or explicit retry</text>
+    <text x="870" y="402" text-anchor="middle" fill="#ffb5a3" font-size="15">automatic or explicit exact-owner retry</text>
 
     <rect x="250" y="624" width="940" height="38" rx="19" fill="#0f2732" stroke="#2ed7c6" stroke-opacity=".24"/>
     <text x="720" y="649" text-anchor="middle" fill="#b9eee7" font-size="16">Explicit stop is normal. The default 10-minute idle deadline is the abandoned-session backstop.</text>
