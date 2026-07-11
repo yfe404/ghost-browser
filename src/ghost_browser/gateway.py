@@ -207,7 +207,7 @@ def release_browser(allocation: Allocation, *, timeout: float = 15) -> None:
             ),
             "",
         )
-        token = allocation.caller_token or gateway_token
+        token = gateway_token or allocation.caller_token
         if token:
             primary_query.append(("token", token))
     primary = urlunsplit(

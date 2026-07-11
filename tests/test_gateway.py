@@ -133,6 +133,27 @@ def test_release_restores_caller_token_when_saved_handle_omits_it(monkeypatch):
     ]
 
 
+def test_release_prefers_explicit_gateway_token_for_saved_handle(monkeypatch):
+    from ghost_browser.gateway import Allocation, release_browser
+
+    monkeypatch.setenv("APIFY_TOKEN", "caller-secret")
+    with fake_gateway() as (gateway_url, requests):
+        port = gateway_url.split(":")[2].split("/")[0]
+        allocation = Allocation(
+            gateway_url=f"{gateway_url}&token=gateway-secret",
+            websocket_url=(
+                f"ws://127.0.0.1:{port}/devtools/browser/opaque"
+            ),
+            browser_id="browser-42",
+            caller_token="caller-secret",
+        )
+        release_browser(allocation, timeout=2)
+
+    assert requests == [
+        ("DELETE", "/v1/sessions/browser-42?token=gateway-secret")
+    ]
+
+
 def test_existing_gateway_token_wins_without_duplication(monkeypatch):
     from ghost_browser.gateway import allocate_browser
 
