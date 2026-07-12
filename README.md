@@ -3,30 +3,31 @@
 
   <h1>Ghost Browser</h1>
 
-  <p><strong>Give your coding agent an isolated stealth Chromium session through Ghost Gateway.</strong></p>
+  <p><strong>An Apify-native browser harness for coding agents.</strong></p>
 
   <p>
-    <img alt="Private alpha" src="https://img.shields.io/badge/status-private_alpha-ff8e70?style=flat-square">
+    <img alt="Public alpha" src="https://img.shields.io/badge/status-public_alpha-ff8e70?style=flat-square">
+    <img alt="Apify native" src="https://img.shields.io/badge/platform-Apify-6f4cff?style=flat-square">
     <img alt="Python 3.11 or newer" src="https://img.shields.io/badge/python-3.11%2B-61b9ff?style=flat-square">
     <img alt="Stealth Chromium over raw Chrome DevTools Protocol" src="https://img.shields.io/badge/browser-stealth_Chromium-2ed7c6?style=flat-square">
     <img alt="POSIX" src="https://img.shields.io/badge/platform-POSIX-9c82ff?style=flat-square">
   </p>
 </div>
 
-Ghost Browser exposes a Ghost-patched stealth Chromium through raw Chrome DevTools Protocol and ordinary
-Python. A small local daemon keeps one browser alive across agent calls and owns allocation, connection
-handling, redaction, and release.
+Ghost Browser gives your coding agent a Ghost-patched stealth Chromium session on Apify through raw Chrome
+DevTools Protocol and ordinary Python. A small local daemon keeps one browser alive across agent calls and
+owns allocation, connection handling, redaction, and release.
 
 > [!IMPORTANT]
-> This repository is an Apify private preview. You need access to the `apify` GitHub organization and a valid
-> `APIFY_TOKEN` for the hosted Gateway.
+> The code is public. The hosted Ghost Gateway requires an Apify account and `APIFY_TOKEN`. The token
+> authenticates the Gateway and attributes its usage; you do not need it to install Ghost Browser.
 
 ## Prompt for your coding agent
 
 Paste this into Codex, Claude Code, or another coding agent with shell access:
 
 ```text
-Install Ghost Browser from the private `apify/ghost-browser` repository with my existing GitHub authentication, then use it through Ghost Gateway. First check whether `gh` is authenticated; clone with `gh repo clone apify/ghost-browser`, or use `git clone git@github.com:apify/ghost-browser.git` if SSH authentication is already configured. Install the checkout with `uv tool install --python 3.12 --editable ./ghost-browser`. Use the `APIFY_TOKEN` already in my environment; do not print it, write it to disk, or put it in a command argument. Then read and follow `agent.md`; read the bundled `ghost-browser skill` output and register it if the agent supports skills. Verify `Browser.getVersion`, then release the test browser and confirm that `ghost-browser status` reports `stopped`.
+Install Ghost Browser from the public repository with `uv tool install --python 3.12 git+https://github.com/yfe404/ghost-browser.git`. It is an Apify-native browser harness: use the `APIFY_TOKEN` already in my environment to authenticate with Ghost Gateway, but never print the token, write it to disk, or put it in a command argument. Verify the installation by running `Browser.getVersion` through `ghost-browser`. Release the test browser afterward and confirm that `ghost-browser status` reports `stopped`.
 ```
 
 <details>
@@ -60,39 +61,31 @@ task proves them useful.
 The protected package contains no task-specific navigation or click DSL. It exposes raw `cdp()` plus a small
 set of page attachment, JavaScript, tab, screenshot, and event conveniences.
 
-## Install for the private preview
+## Install
 
-Use either authenticated GitHub CLI or an SSH key with access to the `apify` organization, then install the
-checkout:
-
-```sh
-gh auth status
-gh repo clone apify/ghost-browser
-uv tool install --python 3.12 --editable ./ghost-browser
-```
-
-Without GitHub CLI:
+Install the public repository:
 
 ```sh
-git clone git@github.com:apify/ghost-browser.git
-uv tool install --python 3.12 --editable ./ghost-browser
+uv tool install --python 3.12 git+https://github.com/yfe404/ghost-browser.git
 ```
 
-Set `APIFY_TOKEN` in the environment. Ghost Browser does not put it in process arguments or project files.
+Set `APIFY_TOKEN` in the environment to use the hosted Gateway. Ghost Browser does not put it in process
+arguments or project files.
 
 <details>
 <summary><strong>Other installation paths</strong></summary>
 
-From an existing checkout with `pipx`:
+From an existing checkout:
 
 ```sh
+uv tool install --python 3.12 --editable .
 pipx install --python python3.12 --editable .
 ```
 
-Install over authenticated SSH without keeping a checkout:
+Install the public repository with `pipx`:
 
 ```sh
-uv tool install --python 3.12 git+ssh://git@github.com/apify/ghost-browser.git
+pipx install --python python3.12 git+https://github.com/yfe404/ghost-browser.git
 ```
 
 </details>
@@ -226,10 +219,10 @@ The legacy `GHOST_STANDBY_URL` variable is also accepted.
 
 </details>
 
-## Private preview feedback
+## Feedback
 
-Open an issue with the browser task, expected result, actual result, `ghost-browser --version`, and the final
-`ghost-browser status`.
+[Open an issue](https://github.com/yfe404/ghost-browser/issues) with the browser task, expected result,
+actual result, `ghost-browser --version`, and the final `ghost-browser status`.
 
 Do not attach tokens, WebSocket URLs, browser identifiers, daemon files, or unredacted command output.
 

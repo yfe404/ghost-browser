@@ -23,7 +23,7 @@ from .redaction import redact
 from .workspace import ensure_agent_helpers, load_agent_helpers
 
 
-USAGE = """Ghost Browser — Python directly over a private Ghost CDP session.
+USAGE = """Ghost Browser — Python directly over an isolated Ghost CDP session.
 
 Usage:
   ghost-browser                  execute Python from stdin

@@ -9,7 +9,7 @@ description = "Raw CDP browser harness for Ghost Gateway"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
-authors = [{ name = "Ghost Browser contributors" }]
+authors = [{ name = "yfe404" }]
 keywords = ["agent", "browser", "cdp", "chromium", "ghost", "stealth"]
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -20,6 +20,11 @@ classifiers = [
   "Topic :: Internet :: WWW/HTTP :: Browsers",
 ]
 dependencies = ["websockets>=15,<16"]
+
+[project.urls]
+Homepage = "https://github.com/yfe404/ghost-browser"
+Repository = "https://github.com/yfe404/ghost-browser"
+Issues = "https://github.com/yfe404/ghost-browser/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.4,<9"]

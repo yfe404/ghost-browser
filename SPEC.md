@@ -2,7 +2,7 @@
 
 ## Goal
 
-Provide coding agents with a lean, installable way to control a Ghost Gateway browser through raw Chrome DevTools Protocol (CDP). The primary onboarding surface is a copyable prompt; the runtime keeps only the infrastructure agents should not rediscover: authenticated allocation, a persistent connection, credential redaction, and reliable cleanup.
+Provide coding agents with a lean, public, Apify-native way to control a Ghost Gateway browser through raw Chrome DevTools Protocol (CDP). Apify-native means the harness uses an `APIFY_TOKEN` for hosted Gateway authentication and usage attribution. The primary onboarding surface is a copyable prompt; the runtime keeps only the infrastructure agents should not rediscover: authenticated allocation, a persistent connection, credential redaction, and reliable cleanup.
 
 ## Public interfaces
 
