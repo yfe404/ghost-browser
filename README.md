@@ -18,10 +18,6 @@ Ghost Browser gives your coding agent a Ghost-patched stealth Chromium session o
 DevTools Protocol and ordinary Python. A small local daemon keeps one browser alive across agent calls and
 owns allocation, connection handling, redaction, and release.
 
-> [!IMPORTANT]
-> Ghost Browser is a public project under `yfe404`, built for Apify's hosted Ghost Gateway. The Gateway
-> requires an Apify account and [API token](https://docs.apify.com/integrations/api#api-token). The token
-> authenticates requests and attributes usage; you do not need it to install Ghost Browser.
 
 ## Prompt for your coding agent
 
