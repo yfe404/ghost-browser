@@ -7,7 +7,7 @@
 
   <p>
     <img alt="Public alpha" src="https://img.shields.io/badge/status-public_alpha-ff8e70?style=flat-square">
-    <img alt="Apify native" src="https://img.shields.io/badge/platform-Apify-6f4cff?style=flat-square">
+    <img alt="Apify native" src="https://img.shields.io/badge/integration-Apify-6f4cff?style=flat-square">
     <img alt="Python 3.11 or newer" src="https://img.shields.io/badge/python-3.11%2B-61b9ff?style=flat-square">
     <img alt="Stealth Chromium over raw Chrome DevTools Protocol" src="https://img.shields.io/badge/browser-stealth_Chromium-2ed7c6?style=flat-square">
     <img alt="POSIX" src="https://img.shields.io/badge/platform-POSIX-9c82ff?style=flat-square">
@@ -19,15 +19,16 @@ DevTools Protocol and ordinary Python. A small local daemon keeps one browser al
 owns allocation, connection handling, redaction, and release.
 
 > [!IMPORTANT]
-> The code is public. The hosted Ghost Gateway requires an Apify account and `APIFY_TOKEN`. The token
-> authenticates the Gateway and attributes its usage; you do not need it to install Ghost Browser.
+> Ghost Browser is a public project under `yfe404`, built for Apify's hosted Ghost Gateway. The Gateway
+> requires an Apify account and [API token](https://docs.apify.com/integrations/api#api-token). The token
+> authenticates requests and attributes usage; you do not need it to install Ghost Browser.
 
 ## Prompt for your coding agent
 
 Paste this into Codex, Claude Code, or another coding agent with shell access:
 
 ```text
-Install Ghost Browser from the public repository with `uv tool install --python 3.12 git+https://github.com/yfe404/ghost-browser.git`. It is an Apify-native browser harness: use the `APIFY_TOKEN` already in my environment to authenticate with Ghost Gateway, but never print the token, write it to disk, or put it in a command argument. Verify the installation by running `Browser.getVersion` through `ghost-browser`. Release the test browser afterward and confirm that `ghost-browser status` reports `stopped`.
+Install Ghost Browser from the public repository with `uv tool install --python 3.12 git+https://github.com/yfe404/ghost-browser.git`. It is an Apify-native browser harness: use the `APIFY_TOKEN` already in my environment to authenticate with Ghost Gateway, but never print the token, write it to disk, or put it in a command argument. Use ordinary Python and arbitrary raw CDP for browser actions; keep any reusable task logic in the editable helper workspace instead of building a fixed action DSL. Verify the installation by running `Browser.getVersion` through `ghost-browser`. Release the test browser afterward and confirm that `ghost-browser status` reports `stopped`.
 ```
 
 <details>
@@ -53,6 +54,10 @@ After setup, open https://deviceandbrowserinfo.com/are_you_a_bot and wait until 
 Your coding agent decides how to inspect, navigate, click, type, and extract. Ghost Browser keeps the
 infrastructure predictable. The editable helper file starts empty, so agents add conveniences only after a
 task proves them useful.
+
+This design follows [Browser Harness](https://www.browser-harness.com/) and
+[The Bitter Lesson of Agent Frameworks](https://browser-use.com/posts/bitter-lesson-agent-frameworks):
+give the model a broad action space and keep the harness focused on reliable infrastructure.
 
 <p align="center">
   <img src="docs/assets/thin-harness.svg" alt="Responsibility matrix showing browser logic owned by the coding agent and infrastructure invariants owned by Ghost Browser." width="100%">
