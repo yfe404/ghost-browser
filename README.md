@@ -31,7 +31,7 @@ Install Ghost Browser from the public repository with `uv tool install --python 
 <summary><strong>Try the browser-interaction demo</strong></summary>
 
 ```text
-After setup, open https://sentinel-bot-detector.vercel.app/. Interact through real CDP input, save the final screenshot as ghost-browser-demo.png, report the detector result and scores, then stop the browser and confirm that `ghost-browser status` reports `stopped`.
+After setup, open https://deviceandbrowserinfo.com/are_you_a_bot_interactions. Complete the login form using real CDP mouse and keyboard input (move the pointer, click the fields, type the credentials, submit). Use any email and a password that contains at least one special character from `> ! ? @ # $ &` — the field enforces an HTML5 pattern and the browser silently blocks submission otherwise, so the verdict never appears. After submitting, wait for the interaction verdict to render. Save the final screenshot as ghost-browser-demo.png, report the human/bot verdict and any detection signals from the raw detection details (for example, super-human typing speed or CDP/automation flags), then stop the browser and confirm that `ghost-browser status` reports `stopped`.
 ```
 
 </details>
