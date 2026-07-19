@@ -17,6 +17,7 @@ from .cdp import CDPConnection
 from .gateway import (
     Allocation,
     allocate_browser,
+    country_from_env,
     gateway_url_from_env,
     release_browser,
 )
@@ -237,6 +238,7 @@ async def _allocate_until_stopped(
         asyncio.to_thread(
             allocate_browser,
             gateway_url_from_env(),
+            country=country_from_env(),
             timeout=timeout,
             _on_unreleased=on_unreleased,
         )

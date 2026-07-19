@@ -210,6 +210,7 @@ sandbox them.
 |---|---|---|
 | `APIFY_TOKEN` | Caller credential and billing identity | required for the hosted Gateway |
 | `GHOST_GATEWAY_URL` | Ghost Gateway HTTP endpoint | hosted Ghost Gateway |
+| `GHOST_BROWSER_COUNTRY` | Proxy egress country (ISO-3166 alpha-2, e.g. `KR`); applies at allocation, so set it before the first command of a session | Gateway default |
 | `GHOST_BROWSER_NAME` | Additional local session discriminator | `default` |
 | `GHOST_BROWSER_IDLE_SECONDS` | Abandoned-browser release deadline | `600` |
 | `GHOST_BROWSER_ALLOCATION_TIMEOUT` | Cold allocation deadline | `180` |

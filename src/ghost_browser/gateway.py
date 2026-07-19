@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -43,6 +44,22 @@ def gateway_url_from_env() -> str:
     ).strip()
 
 
+def _validate_country(value: str) -> str:
+    country = value.strip().upper()
+    if len(country) != 2 or not country.isalpha() or not country.isascii():
+        raise GatewayError(
+            "country must be ISO-3166 alpha-2 (e.g. KR)"
+        )
+    return country
+
+
+def country_from_env() -> str | None:
+    raw = os.environ.get("GHOST_BROWSER_COUNTRY", "").strip()
+    if not raw:
+        return None
+    return _validate_country(raw)
+
+
 def _loopback(hostname: str | None) -> bool:
     return hostname in {"localhost", "127.0.0.1", "::1"}
 
@@ -76,15 +93,58 @@ def _browser_id_from_websocket(websocket_url: str) -> str | None:
     return None
 
 
-def _allocation_url(gateway_url: str, token: str) -> str:
+def _gateway_api_url(gateway_url: str, token: str, suffix: str) -> str:
     parsed = urlsplit(gateway_url)
-    path = f"{parsed.path.rstrip('/')}/json/version"
+    path = f"{parsed.path.rstrip('/')}{suffix}"
     query = parse_qsl(parsed.query, keep_blank_values=True)
     if not any(key == "token" for key, _value in query):
         query.append(("token", token))
     return urlunsplit(
         (parsed.scheme, parsed.netloc, path, urlencode(query), "")
     )
+
+
+def _allocation_url(gateway_url: str, token: str) -> str:
+    return _gateway_api_url(gateway_url, token, "/json/version")
+
+
+def _read_capped_json(response, too_large_message: str):
+    raw = response.read(1_048_577)
+    if len(raw) > 1_048_576:
+        raise GatewayError(too_large_message)
+    return json.loads(raw)
+
+
+def _mint_session(gateway_url: str, token: str, timeout: float) -> str:
+    request = urllib.request.Request(
+        _gateway_api_url(gateway_url, token, "/v1/sessions"),
+        data=b"{}",
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = _read_capped_json(
+                response, "gateway session response is too large"
+            )
+            session = payload["session"]
+            if not isinstance(session, str) or not session:
+                raise KeyError("session")
+            return session
+    except GatewayError:
+        raise
+    except urllib.error.HTTPError as error:
+        raise GatewayError(
+            f"gateway session creation failed: HTTP {error.code}"
+        ) from None
+    except (OSError, TimeoutError) as error:
+        raise GatewayError(
+            f"gateway session creation failed: {type(error).__name__}"
+        ) from None
+    except (KeyError, TypeError, ValueError):
+        raise GatewayError(
+            "gateway session creation returned an invalid response"
+        ) from None
 
 
 def _cleanup_websocket_url(
@@ -142,12 +202,20 @@ def allocate_browser(
     gateway_url: str,
     *,
     token: str | None = None,
+    country: str | None = None,
     timeout: float = 180,
     _on_unreleased: Callable[[Allocation | None], None] | None = None,
 ) -> Allocation:
-    """Allocate exactly one browser through ``/json/version``."""
+    """Allocate exactly one browser.
+
+    Without ``country`` this uses the plain ``/json/version`` discovery path.
+    With ``country`` (ISO-3166 alpha-2) it mints a Gateway session and allocates
+    through ``POST /v1/sessions/{session}/browser`` so the egress matches.
+    """
 
     _validate_gateway_url(gateway_url)
+    if country is not None:
+        country = _validate_country(country)
     caller_token = token if token is not None else os.environ.get("APIFY_TOKEN", "")
     query_has_token = any(
         key == "token" for key, _value in parse_qsl(urlsplit(gateway_url).query)
@@ -158,18 +226,43 @@ def allocate_browser(
         and not _loopback(urlsplit(gateway_url).hostname)
     ):
         raise GatewayError("APIFY_TOKEN is required for the configured gateway")
-    request = urllib.request.Request(_allocation_url(gateway_url, caller_token))
+    request_timeout = timeout
+    if country is None:
+        request = urllib.request.Request(_allocation_url(gateway_url, caller_token))
+    else:
+        started = time.monotonic()
+        session = _mint_session(gateway_url, caller_token, timeout)
+        request_timeout = timeout - (time.monotonic() - started)
+        if request_timeout <= 0:
+            raise GatewayError("gateway allocation timed out during session creation")
+        request = urllib.request.Request(
+            _gateway_api_url(
+                gateway_url,
+                caller_token,
+                f"/v1/sessions/{quote(session, safe='')}/browser",
+            ),
+            data=json.dumps({"country": country}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
     browser_id: str | None = None
     successful_response = False
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urllib.request.urlopen(request, timeout=request_timeout) as response:
             successful_response = True
             browser_id = response.headers.get("X-Ghost-Session")
-            raw = response.read(1_048_577)
-            if len(raw) > 1_048_576:
-                raise GatewayError("gateway allocation response is too large")
-            payload = json.loads(raw)
-            candidate = payload["webSocketDebuggerUrl"]
+            payload = _read_capped_json(
+                response, "gateway allocation response is too large"
+            )
+            if country is None:
+                candidate = payload["webSocketDebuggerUrl"]
+            else:
+                identifier = (
+                    payload.get("browserId") if isinstance(payload, dict) else None
+                )
+                if isinstance(identifier, str) and identifier:
+                    browser_id = identifier
+                candidate = payload["cdp"]["webSocketDebuggerUrl"]
             if not browser_id and isinstance(candidate, str):
                 browser_id = _browser_id_from_websocket(candidate)
             websocket_url = _validate_websocket_url(

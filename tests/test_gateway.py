@@ -14,10 +14,54 @@ def fake_gateway(
     browser_id="browser-42",
     raw_body=None,
     delete_status=204,
+    session_id="durable-7",
+    session_browser_body=None,
+    mint_status=201,
+    browser_status=200,
 ):
     requests = []
 
     class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            body = self.rfile.read(length)
+            requests.append((self.command, self.path, body))
+            path = self.path.split("?")[0]
+            if path.endswith("/v1/sessions"):
+                if mint_status != 201:
+                    payload = b"upstream detail containing caller-secret"
+                    self.send_response(mint_status)
+                else:
+                    payload = json.dumps(
+                        {"session": session_id, "rev": 0}
+                    ).encode()
+                    self.send_response(201)
+            elif path.endswith("/browser"):
+                if browser_status != 200:
+                    payload = b"upstream detail containing caller-secret"
+                    self.send_response(browser_status)
+                else:
+                    # the real Gateway returns the pool id that is also the ws path tail
+                    payload = (
+                        session_browser_body
+                        if session_browser_body is not None
+                        else json.dumps(
+                            {
+                                "session": session_id,
+                                "browserId": "opaque",
+                                "cdp": {"webSocketDebuggerUrl": ws_url},
+                            }
+                        ).encode()
+                    )
+                    self.send_response(200)
+            else:
+                payload = b'{"error":"not found"}'
+                self.send_response(404)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
         def do_GET(self):
             requests.append((self.command, self.path))
             if status != 200:
@@ -370,3 +414,128 @@ def test_remote_malformed_cleanup_is_not_marked_exact_owner(monkeypatch):
 
     assert len(captured) == 1
     assert captured[0].exact_owner is False
+
+
+def test_allocate_browser_with_country_uses_session_allocation(monkeypatch):
+    from ghost_browser.gateway import allocate_browser
+
+    monkeypatch.setenv("APIFY_TOKEN", "caller-secret")
+    with fake_gateway() as (gateway_url, requests):
+        allocation = allocate_browser(gateway_url, country="kr", timeout=2)
+
+    assert [(method, path) for method, path, *_ in requests] == [
+        ("POST", "/tenant/v1/sessions?region=eu&token=caller-secret"),
+        (
+            "POST",
+            "/tenant/v1/sessions/durable-7/browser?region=eu&token=caller-secret",
+        ),
+    ]
+    assert json.loads(requests[1][2]) == {"country": "KR"}
+    assert allocation.browser_id == "opaque"
+    assert allocation.websocket_url == (
+        "ws://127.0.0.1:9222/devtools/browser/opaque?token=ws-secret"
+    )
+
+
+def test_allocate_browser_without_country_keeps_discovery_path(monkeypatch):
+    from ghost_browser.gateway import allocate_browser
+
+    monkeypatch.setenv("APIFY_TOKEN", "caller-secret")
+    with fake_gateway() as (gateway_url, requests):
+        allocate_browser(gateway_url, country=None, timeout=2)
+
+    assert [(method, path) for method, path, *_ in requests] == [
+        ("GET", "/tenant/json/version?region=eu&token=caller-secret")
+    ]
+
+
+def test_invalid_country_is_rejected_before_any_request(monkeypatch):
+    from ghost_browser.gateway import GatewayError, allocate_browser
+
+    monkeypatch.setenv("APIFY_TOKEN", "caller-secret")
+    with fake_gateway() as (gateway_url, requests):
+        for bad in ("KOR", "K", "12", "K1"):
+            with pytest.raises(GatewayError, match="ISO-3166"):
+                allocate_browser(gateway_url, country=bad, timeout=2)
+
+    assert requests == []
+
+
+def test_malformed_session_allocation_releases_identified_browser(monkeypatch):
+    from ghost_browser.gateway import GatewayError, allocate_browser
+
+    monkeypatch.setenv("APIFY_TOKEN", "caller-secret")
+    with fake_gateway(
+        session_browser_body=b'{"session":"durable-7","browserId":"browser-99"}'
+    ) as (gateway_url, requests):
+        with pytest.raises(GatewayError, match="invalid response"):
+            allocate_browser(gateway_url, country="KR", timeout=2)
+
+    assert any(
+        method == "DELETE" and "browser-99" in path
+        for method, path, *_ in requests
+    )
+
+
+def test_country_from_env_normalizes_and_validates(monkeypatch):
+    from ghost_browser.gateway import GatewayError, country_from_env
+
+    monkeypatch.delenv("GHOST_BROWSER_COUNTRY", raising=False)
+    assert country_from_env() is None
+
+    monkeypatch.setenv("GHOST_BROWSER_COUNTRY", "")
+    assert country_from_env() is None
+
+    monkeypatch.setenv("GHOST_BROWSER_COUNTRY", " kr ")
+    assert country_from_env() == "KR"
+
+    monkeypatch.setenv("GHOST_BROWSER_COUNTRY", "KOR")
+    with pytest.raises(GatewayError, match="ISO-3166"):
+        country_from_env()
+
+
+def test_daemon_threads_env_country_into_allocation(monkeypatch):
+    import asyncio
+
+    from ghost_browser import daemon
+
+    captured = {}
+
+    def fake_allocate(gateway_url, *, country=None, timeout, _on_unreleased=None):
+        captured["country"] = country
+        return "allocation"
+
+    monkeypatch.setattr(daemon, "allocate_browser", fake_allocate)
+    monkeypatch.setenv("GHOST_BROWSER_COUNTRY", "kr")
+
+    async def run():
+        return await daemon._allocate_until_stopped(asyncio.Event(), None)
+
+    assert asyncio.run(run()) == "allocation"
+    assert captured["country"] == "KR"
+
+
+def test_session_mint_errors_are_sanitized(monkeypatch):
+    from ghost_browser.gateway import GatewayError, allocate_browser
+
+    monkeypatch.setenv("APIFY_TOKEN", "caller-secret")
+    with fake_gateway(mint_status=402) as (gateway_url, requests):
+        with pytest.raises(GatewayError) as raised:
+            allocate_browser(gateway_url, country="KR", timeout=2)
+
+    assert "HTTP 402" in str(raised.value)
+    assert "caller-secret" not in str(raised.value)
+    assert not any(method == "DELETE" for method, *_ in requests)
+
+
+def test_session_browser_errors_are_sanitized_without_cleanup(monkeypatch):
+    from ghost_browser.gateway import GatewayError, allocate_browser
+
+    monkeypatch.setenv("APIFY_TOKEN", "caller-secret")
+    with fake_gateway(browser_status=503) as (gateway_url, requests):
+        with pytest.raises(GatewayError) as raised:
+            allocate_browser(gateway_url, country="KR", timeout=2)
+
+    assert "HTTP 503" in str(raised.value)
+    assert "caller-secret" not in str(raised.value)
+    assert not any(method == "DELETE" for method, *_ in requests)

@@ -7,7 +7,7 @@ Provide coding agents with a lean, public, Apify-native way to control a Ghost G
 ## Public interfaces
 
 1. **CLI** — `ghost-browser` executes Python from standard input with raw CDP and a small editable helper environment; `status`, `stop`, and `skill` manage the session and agent integration.
-2. **Gateway connector** — resolves `GET /json/version` using `APIFY_TOKEN`, tolerates cold starts, validates the returned WebSocket URL, and never prints or logs credentials.
+2. **Gateway connector** — resolves `GET /json/version` using `APIFY_TOKEN`, tolerates cold starts, validates the returned WebSocket URL, and never prints or logs credentials. When `GHOST_BROWSER_COUNTRY` selects an egress country, allocation instead mints a Gateway session (`POST /v1/sessions`) and allocates through `POST /v1/sessions/{session}/browser` with the requested country, under the same allocation timeout budget and credential rules.
 3. **Session lifecycle** — one owner-only local daemon keeps the remote browser alive across CLI calls, explicit `stop` releases it, and an idle deadline prevents abandoned billed sessions. Cleanup is confirmed by a normal WebSocket close or successful idempotent DELETE; an unconfirmed release remains retryable.
 
 ## Requirements
@@ -36,5 +36,6 @@ Provide coding agents with a lean, public, Apify-native way to control a Ghost G
 - A general autonomous browser agent or planner.
 - Browser Use Cloud/local Chrome support.
 - A large semantic action library.
-- Durable Ghost identity/session APIs in v0.1.
+- Durable Ghost identity/session APIs in v0.1, beyond the minimal session mint used internally for
+  country-selected allocation. Minted sessions are not persisted client-side; the Gateway reaps them.
 - Windows IPC support in v0.1.
